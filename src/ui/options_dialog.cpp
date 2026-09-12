@@ -2,6 +2,7 @@
 #include "ui/options_dialog.hpp"
 #include "ble/ble_manager.hpp"
 #include "cloud/pair_key_provider.hpp"
+#include "ui/sms_login_dialog.hpp"
 #include "common/config.hpp"
 #include "protocol/duml.hpp"
 
@@ -24,7 +25,6 @@ enum : int {
     IDC_SCAN,
     IDC_PAIR_KEY,
     IDC_GET_KEY,
-    IDC_TOKEN,
     IDC_AUTO_CONNECT,
     IDC_AUTO_RECONNECT,
     IDC_STATUS,
@@ -80,7 +80,6 @@ private:
     HWND hwnd_{};
     HWND device_{};
     HWND pair_{};
-    HWND token_{};
     HWND status_{};
     HWND values_{};
     HFONT font_{};
@@ -134,7 +133,7 @@ private:
         CreateFonts();
 
         // Windows 8.1 时期的桌面设置窗口强调紧凑、对齐和信息密度。
-        RECT desired{0, 0, Scale(570), Scale(400)};
+        RECT desired{0, 0, Scale(570), Scale(360)};
         AdjustWindowRectExForDpi(&desired, WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
             FALSE, WS_EX_DLGMODALFRAME, dpi_);
         SetWindowPos(hwnd_, nullptr, 0, 0, desired.right - desired.left,
@@ -148,7 +147,7 @@ private:
         SendMessageW(ble_mode, BM_SETCHECK, BST_CHECKED, 0);
         EnableWindow(cloud_mode, FALSE);
 
-        Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 12, 66, 546, 196, 0, bold_font_);
+        Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 12, 66, 546, 156, 0, bold_font_);
         Add(L"STATIC", L"设备：", SS_LEFT, 28, 96, 70, 20);
         device_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
             105, 92, 335, 180, IDC_DEVICE);
@@ -158,32 +157,29 @@ private:
         pair_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
             105, 128, 335, 24, IDC_PAIR_KEY);
         SendMessageW(pair_, EM_SETPASSWORDCHAR, L'●', 0);
-        Add(L"BUTTON", L"获取 Key", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
+        Add(L"BUTTON", L"短信登录", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
 
-        Add(L"STATIC", L"Token：", SS_LEFT, 28, 168, 70, 20);
-        token_ = Add(L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP,
-            105, 164, 439, 24, IDC_TOKEN);
-        Add(L"STATIC", L"仅用于获取 Key，完成后立即清除，不会保存。",
-            SS_LEFT, 105, 191, 420, 18, IDC_SUBTITLE);
+        Add(L"STATIC", L"登录信息和临时 Token 仅保存在内存中，获取完成后立即清除。",
+            SS_LEFT, 105, 162, 439, 18, IDC_SUBTITLE);
 
         const auto auto_connect = Add(L"BUTTON", L"启动后自动连接",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 28, 226, 155, 22, IDC_AUTO_CONNECT);
+            BS_AUTOCHECKBOX | WS_TABSTOP, 28, 190, 155, 22, IDC_AUTO_CONNECT);
         const auto auto_reconnect = Add(L"BUTTON", L"断线自动重连",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 205, 226, 150, 22, IDC_AUTO_RECONNECT);
+            BS_AUTOCHECKBOX | WS_TABSTOP, 205, 190, 150, 22, IDC_AUTO_RECONNECT);
         SendMessageW(auto_connect, BM_SETCHECK, editing_.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(auto_reconnect, BM_SETCHECK, editing_.auto_reconnect ? BST_CHECKED : BST_UNCHECKED, 0);
 
-        Add(L"BUTTON", L"运行状态", BS_GROUPBOX, 12, 270, 546, 66, 0, bold_font_);
-        status_ = Add(L"STATIC", L"正在启动扫描…", SS_LEFT, 28, 291, 510, 20, IDC_STATUS, bold_font_);
+        Add(L"BUTTON", L"运行状态", BS_GROUPBOX, 12, 230, 546, 66, 0, bold_font_);
+        status_ = Add(L"STATIC", L"正在启动扫描…", SS_LEFT, 28, 251, 510, 20, IDC_STATUS, bold_font_);
         values_ = Add(L"STATIC", L"输入  -- W      输出  -- W      净功率  -- W      电量  -- %",
-            SS_LEFT, 28, 312, 510, 20, IDC_VALUES);
+            SS_LEFT, 28, 272, 510, 20, IDC_VALUES);
 
         Add(L"BUTTON", L"测试连接", BS_PUSHBUTTON | WS_TABSTOP,
-            300, 353, 82, 27, IDC_TEST);
+            300, 313, 82, 27, IDC_TEST);
         Add(L"BUTTON", L"确定", BS_DEFPUSHBUTTON | WS_TABSTOP,
-            390, 353, 76, 27, IDOK);
+            390, 313, 76, 27, IDOK);
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
-            474, 353, 76, 27, IDCANCEL);
+            474, 313, 76, 27, IDCANCEL);
 
         SetWindowTextA(pair_, editing_.pair_key.c_str());
         RefreshDevices();
@@ -239,18 +235,9 @@ private:
     }
 
     void FetchKey() {
-        std::array<wchar_t, 2048> token{};
-        GetWindowTextW(token_, token.data(), static_cast<int>(token.size()));
-        SetWindowTextW(status_, L"正在从 DJI 获取设备 Key…");
-        UpdateWindow(hwnd_);
-        std::wstring error;
-        const auto cloud_devices = DefaultPairKeyProvider().FetchWithMemberToken(token.data(), error);
-        SecureZeroMemory(token.data(), token.size() * sizeof(wchar_t));
-        SetWindowTextW(token_, L"");
-        if (cloud_devices.empty()) {
-            MessageBoxW(hwnd_, error.c_str(), L"获取 Key 失败", MB_ICONERROR);
-            return;
-        }
+        // 登录流程放在独立模态窗口中，设置页不接触账号凭据。
+        const auto cloud_devices = ShowSmsLoginDialog(hwnd_);
+        if (cloud_devices.empty()) return;
         SetWindowTextA(pair_, cloud_devices.front().pair_key.c_str());
         editing_.device_name = cloud_devices.front().name;
         const auto message = L"已取得 " + std::to_wstring(cloud_devices.size()) +

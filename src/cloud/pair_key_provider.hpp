@@ -1,15 +1,65 @@
-// 本文件定义一次性云端凭据换取本地 pair_key 的可替换 Provider 接口。
+// 本文件定义 DJI 账号短信登录及一次性换取本地 pair_key 的接口。
 #pragma once
+
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dji_power {
-struct CloudDevice { std::wstring name; std::wstring serial_number; std::string pair_key; };
+
+struct CloudDevice {
+    std::wstring name;
+    std::wstring serial_number;
+    std::string pair_key;
+};
+
+// 登录会话只存在于“获取 Key”窗口生命周期内，析构时主动擦除敏感字段。
+struct SmsLoginSession {
+    std::wstring cookies;
+    std::wstring csrf_token;
+    std::wstring html_version;
+    std::string captcha_random;
+    std::string captcha_ticket;
+
+    SmsLoginSession() = default;
+    SmsLoginSession(const SmsLoginSession&) = delete;
+    SmsLoginSession& operator=(const SmsLoginSession&) = delete;
+    ~SmsLoginSession();
+    void Clear() noexcept;
+};
+
 class PairKeyProvider {
 public:
     virtual ~PairKeyProvider() = default;
-    virtual std::vector<CloudDevice> FetchWithMemberToken(const std::wstring& token, std::wstring& error) = 0;
+
+    virtual std::vector<CloudDevice> FetchWithMemberToken(
+        const std::wstring& token, std::wstring& error) = 0;
+
+    // 初始化 DJI 官方账号会话，并返回本次会话对应的图片验证码 PNG。
+    virtual bool BeginSmsLogin(SmsLoginSession& login, std::vector<std::uint8_t>& captcha_png,
+                               std::wstring& error) = 0;
+    virtual bool RefreshCaptcha(SmsLoginSession& login, std::vector<std::uint8_t>& captcha_png,
+                                std::wstring& error) = 0;
+
+    // 只有用户明确点击“发送验证码”时才会触发真实短信。
+    virtual bool SendSmsCode(SmsLoginSession& login, const std::wstring& area_code,
+                             const std::wstring& phone, const std::wstring& image_code,
+                             std::wstring& error) = 0;
+
+    // 校验短信验证码，取得临时 member token 后立即读取设备 pair_key。
+    virtual std::vector<CloudDevice> FetchWithSmsCode(
+        SmsLoginSession& login, const std::wstring& area_code, const std::wstring& phone,
+        const std::wstring& sms_code, std::wstring& error) = 0;
 };
+
 PairKeyProvider& DefaultPairKeyProvider();
+
+namespace cloud_detail {
+// 这些解析函数独立于网络，供自动化测试覆盖 DJI 返回字段变化。
+std::vector<CloudDevice> ParseDevicesJson(std::string_view json);
+std::string ExtractMemberToken(std::string_view json);
+std::wstring ExtractApiError(std::string_view json, std::wstring_view fallback);
+} // namespace cloud_detail
 } // namespace dji_power
 

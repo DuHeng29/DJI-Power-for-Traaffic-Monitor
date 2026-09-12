@@ -1,6 +1,6 @@
 # 本文件定义 DJIPowerPlugin 的构建、依赖和测试入口。
 cmake_minimum_required(VERSION 3.24)
-project(DJIPowerForTrafficMonitor VERSION 0.2.0 LANGUAGES CXX)
+project(DJIPowerForTrafficMonitor VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,10 +39,11 @@ add_library(DJIPowerPlugin SHARED
     src/plugin/plugin.cpp
     src/ble/ble_manager.cpp
     src/cloud/pair_key_provider.cpp
-    src/ui/options_dialog.cpp)
+    src/ui/options_dialog.cpp
+    src/ui/sms_login_dialog.cpp)
 target_include_directories(DJIPowerPlugin PRIVATE src "${TM_INCLUDE_DIR}")
 target_compile_definitions(DJIPowerPlugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32 uxtheme)
+target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32 uxtheme windowscodecs ole32)
 set_target_properties(DJIPowerPlugin PROPERTIES OUTPUT_NAME "DJIPowerPlugin")
 
 if(MSVC)
@@ -65,6 +66,15 @@ if(BUILD_TESTING)
     target_compile_definitions(protocol_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(protocol_tests PRIVATE /utf-8)
     add_test(NAME protocol_tests COMMAND protocol_tests)
+
+    add_executable(cloud_parser_tests
+        tests/cloud_parser_tests.cpp
+        src/cloud/pair_key_provider.cpp)
+    target_include_directories(cloud_parser_tests PRIVATE src)
+    target_compile_definitions(cloud_parser_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(cloud_parser_tests PRIVATE /utf-8)
+    target_link_libraries(cloud_parser_tests PRIVATE dji_power_core winhttp ole32)
+    add_test(NAME cloud_parser_tests COMMAND cloud_parser_tests)
 
     add_executable(plugin_smoke_tests tests/plugin_smoke_tests.cpp)
     target_include_directories(plugin_smoke_tests PRIVATE "${TM_INCLUDE_DIR}")
