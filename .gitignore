@@ -1,0 +1,38 @@
+# CMake 构建目录与生成文件
+/build/
+/out/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Visual Studio / MSVC
+/.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.exp
+*.lib
+*.dll
+*.exe
+
+# 测试、日志与运行时状态
+/Testing/
+*.log
+*.dmp
+config.local.json
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,67 @@
+# 本文件定义 DJIPowerPlugin 的构建、依赖和测试入口。
+cmake_minimum_required(VERSION 3.24)
+project(DJIPowerForTrafficMonitor VERSION 0.2.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+set(TRAFFICMONITOR_SDK_DIR "" CACHE PATH "包含 PluginInterface.h 的 TrafficMonitor include 目录")
+if(TRAFFICMONITOR_SDK_DIR)
+    set(TM_INCLUDE_DIR "${TRAFFICMONITOR_SDK_DIR}")
+else()
+    set(TM_INCLUDE_DIR "${CMAKE_BINARY_DIR}/_deps/trafficmonitor/include")
+    file(MAKE_DIRECTORY "${TM_INCLUDE_DIR}")
+    set(TM_HEADER "${TM_INCLUDE_DIR}/PluginInterface.h")
+    if(NOT EXISTS "${TM_HEADER}")
+        file(DOWNLOAD
+            "https://raw.githubusercontent.com/zhongyang219/TrafficMonitor/master/include/PluginInterface.h"
+            "${TM_HEADER}" TLS_VERIFY ON STATUS TM_DOWNLOAD_STATUS)
+        list(GET TM_DOWNLOAD_STATUS 0 TM_DOWNLOAD_CODE)
+        if(NOT TM_DOWNLOAD_CODE EQUAL 0)
+            message(FATAL_ERROR "无法下载 TrafficMonitor SDK；请设置 TRAFFICMONITOR_SDK_DIR")
+        endif()
+    endif()
+endif()
+
+add_library(dji_power_core STATIC
+    src/protocol/duml.cpp
+    src/common/config.cpp
+    src/common/telemetry_store.cpp)
+target_include_directories(dji_power_core PUBLIC src)
+target_compile_definitions(dji_power_core PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(dji_power_core PUBLIC crypt32)
+
+add_library(DJIPowerPlugin SHARED
+    src/plugin/dllmain.cpp
+    src/plugin/plugin.cpp
+    src/ble/ble_manager.cpp
+    src/cloud/pair_key_provider.cpp
+    src/ui/options_dialog.cpp)
+target_include_directories(DJIPowerPlugin PRIVATE src "${TM_INCLUDE_DIR}")
+target_compile_definitions(DJIPowerPlugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32)
+set_target_properties(DJIPowerPlugin PROPERTIES OUTPUT_NAME "DJIPowerPlugin")
+
+if(MSVC)
+    target_compile_options(dji_power_core PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(DJIPowerPlugin PRIVATE /W4 /permissive- /utf-8)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(protocol_tests tests/protocol_tests.cpp)
+    target_link_libraries(protocol_tests PRIVATE dji_power_core)
+    target_compile_definitions(protocol_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(protocol_tests PRIVATE /utf-8)
+    add_test(NAME protocol_tests COMMAND protocol_tests)
+
+    add_executable(plugin_smoke_tests tests/plugin_smoke_tests.cpp)
+    target_include_directories(plugin_smoke_tests PRIVATE "${TM_INCLUDE_DIR}")
+    target_compile_definitions(plugin_smoke_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(plugin_smoke_tests PRIVATE /utf-8)
+    add_test(NAME plugin_smoke_tests COMMAND plugin_smoke_tests "$<TARGET_FILE:DJIPowerPlugin>")
+endif()
+
