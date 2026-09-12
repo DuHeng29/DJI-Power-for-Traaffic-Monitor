@@ -124,69 +124,66 @@ private:
                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
                 L"Segoe UI");
         };
-        font_ = create(10, FW_NORMAL);
-        bold_font_ = create(10, FW_SEMIBOLD);
-        title_font_ = create(18, FW_SEMIBOLD);
+        font_ = create(9, FW_NORMAL);
+        bold_font_ = create(9, FW_SEMIBOLD);
+        title_font_ = create(9, FW_SEMIBOLD);
     }
 
     void Build() {
         dpi_ = GetDpiForWindow(hwnd_);
         CreateFonts();
 
-        RECT desired{0, 0, Scale(680), Scale(535)};
+        // Windows 8.1 时期的桌面设置窗口强调紧凑、对齐和信息密度。
+        RECT desired{0, 0, Scale(570), Scale(400)};
         AdjustWindowRectExForDpi(&desired, WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
             FALSE, WS_EX_DLGMODALFRAME, dpi_);
         SetWindowPos(hwnd_, nullptr, 0, 0, desired.right - desired.left,
             desired.bottom - desired.top, SWP_NOMOVE | SWP_NOZORDER);
 
-        Add(L"STATIC", L"DJI Power", SS_LEFT, 24, 18, 400, 34, IDC_TITLE, title_font_);
-        Add(L"STATIC", L"本地 BLE 实时监控 · 数据不会经过云端", SS_LEFT,
-            25, 55, 520, 22, IDC_SUBTITLE);
-
-        Add(L"BUTTON", L"连接方式", BS_GROUPBOX, 20, 88, 640, 65, 0, bold_font_);
+        Add(L"BUTTON", L"连接方式", BS_GROUPBOX, 12, 10, 546, 50, 0, bold_font_);
         const auto ble_mode = Add(L"BUTTON", L"本地 BLE", BS_AUTORADIOBUTTON | WS_GROUP,
-            42, 116, 130, 24, IDC_BLE_MODE);
+            28, 29, 110, 22, IDC_BLE_MODE);
         const auto cloud_mode = Add(L"BUTTON", L"DJI Cloud（备用，暂未启用）",
-            BS_AUTORADIOBUTTON, 200, 116, 245, 24, IDC_CLOUD_MODE);
+            BS_AUTORADIOBUTTON, 158, 29, 215, 22, IDC_CLOUD_MODE);
         SendMessageW(ble_mode, BM_SETCHECK, BST_CHECKED, 0);
         EnableWindow(cloud_mode, FALSE);
 
-        Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 20, 165, 640, 205, 0, bold_font_);
-        Add(L"STATIC", L"设备", SS_LEFT, 42, 198, 90, 22);
+        Add(L"BUTTON", L"设备与凭据", BS_GROUPBOX, 12, 66, 546, 196, 0, bold_font_);
+        Add(L"STATIC", L"设备：", SS_LEFT, 28, 96, 70, 20);
         device_ = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-            135, 194, 390, 220, IDC_DEVICE);
-        Add(L"BUTTON", L"重新扫描", BS_PUSHBUTTON | WS_TABSTOP, 540, 193, 96, 29, IDC_SCAN);
+            105, 92, 335, 180, IDC_DEVICE);
+        Add(L"BUTTON", L"重新扫描", BS_PUSHBUTTON | WS_TABSTOP, 449, 91, 95, 26, IDC_SCAN);
 
-        Add(L"STATIC", L"Pair Key", SS_LEFT, 42, 242, 90, 22);
+        Add(L"STATIC", L"Pair Key：", SS_LEFT, 28, 132, 70, 20);
         pair_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-            135, 238, 390, 27, IDC_PAIR_KEY);
+            105, 128, 335, 24, IDC_PAIR_KEY);
         SendMessageW(pair_, EM_SETPASSWORDCHAR, L'●', 0);
-        Add(L"BUTTON", L"获取 Key", BS_PUSHBUTTON | WS_TABSTOP, 540, 237, 96, 29, IDC_GET_KEY);
+        Add(L"BUTTON", L"获取 Key", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
 
-        Add(L"STATIC", L"Member Token", SS_LEFT, 42, 287, 90, 22);
+        Add(L"STATIC", L"Token：", SS_LEFT, 28, 168, 70, 20);
         token_ = Add(L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP,
-            135, 283, 501, 27, IDC_TOKEN);
-        Add(L"STATIC", L"仅在获取 Key 时使用，完成后立即从内存清除，不会保存。",
-            SS_LEFT, 135, 313, 500, 20, IDC_SUBTITLE);
+            105, 164, 439, 24, IDC_TOKEN);
+        Add(L"STATIC", L"仅用于获取 Key，完成后立即清除，不会保存。",
+            SS_LEFT, 105, 191, 420, 18, IDC_SUBTITLE);
 
         const auto auto_connect = Add(L"BUTTON", L"启动后自动连接",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 42, 339, 180, 24, IDC_AUTO_CONNECT);
+            BS_AUTOCHECKBOX | WS_TABSTOP, 28, 226, 155, 22, IDC_AUTO_CONNECT);
         const auto auto_reconnect = Add(L"BUTTON", L"断线自动重连",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 245, 339, 180, 24, IDC_AUTO_RECONNECT);
+            BS_AUTOCHECKBOX | WS_TABSTOP, 205, 226, 150, 22, IDC_AUTO_RECONNECT);
         SendMessageW(auto_connect, BM_SETCHECK, editing_.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(auto_reconnect, BM_SETCHECK, editing_.auto_reconnect ? BST_CHECKED : BST_UNCHECKED, 0);
 
-        Add(L"BUTTON", L"运行状态", BS_GROUPBOX, 20, 382, 640, 78, 0, bold_font_);
-        status_ = Add(L"STATIC", L"正在启动扫描…", SS_LEFT, 42, 411, 590, 22, IDC_STATUS, bold_font_);
+        Add(L"BUTTON", L"运行状态", BS_GROUPBOX, 12, 270, 546, 66, 0, bold_font_);
+        status_ = Add(L"STATIC", L"正在启动扫描…", SS_LEFT, 28, 291, 510, 20, IDC_STATUS, bold_font_);
         values_ = Add(L"STATIC", L"输入  -- W      输出  -- W      净功率  -- W      电量  -- %",
-            SS_LEFT, 42, 435, 590, 22, IDC_VALUES);
+            SS_LEFT, 28, 312, 510, 20, IDC_VALUES);
 
         Add(L"BUTTON", L"测试连接", BS_PUSHBUTTON | WS_TABSTOP,
-            341, 482, 100, 32, IDC_TEST);
+            300, 353, 82, 27, IDC_TEST);
         Add(L"BUTTON", L"确定", BS_DEFPUSHBUTTON | WS_TABSTOP,
-            449, 482, 88, 32, IDOK);
+            390, 353, 76, 27, IDOK);
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
-            545, 482, 88, 32, IDCANCEL);
+            474, 353, 76, 27, IDCANCEL);
 
         SetWindowTextA(pair_, editing_.pair_key.c_str());
         RefreshDevices();
