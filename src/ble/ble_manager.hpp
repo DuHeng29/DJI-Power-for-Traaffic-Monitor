@@ -20,6 +20,7 @@ public:
     void Start();
     void Stop();
     void Reconfigure(const PluginConfig& config);
+    void Rescan();
     void ConnectNow();
     std::vector<DiscoveredDevice> Devices() const;
     TelemetrySnapshot Snapshot() const;

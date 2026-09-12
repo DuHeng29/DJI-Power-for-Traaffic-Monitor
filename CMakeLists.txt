@@ -42,13 +42,21 @@ add_library(DJIPowerPlugin SHARED
     src/ui/options_dialog.cpp)
 target_include_directories(DJIPowerPlugin PRIVATE src "${TM_INCLUDE_DIR}")
 target_compile_definitions(DJIPowerPlugin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32)
+target_link_libraries(DJIPowerPlugin PRIVATE dji_power_core windowsapp winhttp comctl32 crypt32 uxtheme)
 set_target_properties(DJIPowerPlugin PROPERTIES OUTPUT_NAME "DJIPowerPlugin")
 
 if(MSVC)
     target_compile_options(dji_power_core PRIVATE /W4 /permissive- /utf-8)
     target_compile_options(DJIPowerPlugin PRIVATE /W4 /permissive- /utf-8)
 endif()
+
+add_executable(ble_scan_probe
+    tests/ble_scan_probe.cpp
+    src/ble/ble_manager.cpp)
+target_include_directories(ble_scan_probe PRIVATE src)
+target_compile_definitions(ble_scan_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(ble_scan_probe PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(ble_scan_probe PRIVATE dji_power_core windowsapp)
 
 include(CTest)
 if(BUILD_TESTING)

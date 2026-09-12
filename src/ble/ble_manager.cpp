@@ -42,6 +42,33 @@ std::wstring AddressText(std::uint64_t value) {
         (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
     return text;
 }
+bool IsDjiPowerAdvertisement(const adv::BluetoothLEAdvertisementReceivedEventArgs& args,
+                             std::uint64_t configured_address) {
+    if (configured_address != 0 && args.BluetoothAddress() == configured_address) return true;
+
+    auto name = std::wstring(args.Advertisement().LocalName());
+    std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+    if (name.starts_with(L"power") || name.find(L"dji power") != std::wstring::npos) return true;
+
+    const auto service_uuid = winrt::guid(duml::kServiceUuid);
+    for (const auto& uuid : args.Advertisement().ServiceUuids()) {
+        if (uuid == service_uuid) return true;
+    }
+
+    // DJI 的 Windows 广播项把公司 ID 与厂商数据分开暴露；已知 Power 型号码为 91/94/97/98。
+    for (const auto& item : args.Advertisement().ManufacturerData()) {
+        if (item.CompanyId() != 0x08AA) continue;
+        const auto bytes = FromBuffer(item.Data());
+        if (bytes.empty()) return true;
+        switch (bytes.front()) {
+        case 0x91: case 0x94: case 0x97: case 0x98:
+            return true;
+        default:
+            break;
+        }
+    }
+    return false;
+}
 } // namespace
 
 struct BleManager::Impl {
@@ -84,8 +111,10 @@ struct BleManager::Impl {
     void BeginScan() {
         watcher = adv::BluetoothLEAdvertisementWatcher();
         watcher.ScanningMode(adv::BluetoothLEScanningMode::Active);
-        watcher.AdvertisementFilter().Advertisement().ServiceUuids().Append(winrt::guid(duml::kServiceUuid));
         received_token = watcher.Received([this](auto const&, const adv::BluetoothLEAdvertisementReceivedEventArgs& args) {
+            std::uint64_t configured_address = 0;
+            { std::scoped_lock lock(mutex); configured_address = config.bluetooth_address; }
+            if (!IsDjiPowerAdvertisement(args, configured_address)) return;
             const auto name = args.Advertisement().LocalName().empty() ? AddressText(args.BluetoothAddress()) : std::wstring(args.Advertisement().LocalName());
             std::scoped_lock lock(mutex);
             const auto found = std::find_if(devices.begin(), devices.end(), [&](const auto& item) { return item.address == args.BluetoothAddress(); });
@@ -259,6 +288,12 @@ BleManager::~BleManager() { Stop(); }
 void BleManager::Start() { impl_->Start(); }
 void BleManager::Stop() { impl_->Stop(); }
 void BleManager::Reconfigure(const PluginConfig& value) { std::scoped_lock lock(impl_->mutex); impl_->config = value; impl_->reconnect_requested = true; impl_->condition.notify_all(); }
+void BleManager::Rescan() {
+    std::scoped_lock lock(impl_->mutex);
+    impl_->devices.clear();
+    impl_->store.SetStatus(ConnectionState::scanning, L"正在扫描 DJI Power");
+    impl_->condition.notify_all();
+}
 void BleManager::ConnectNow() { std::scoped_lock lock(impl_->mutex); impl_->reconnect_requested = true; impl_->condition.notify_all(); }
 std::vector<DiscoveredDevice> BleManager::Devices() const { std::scoped_lock lock(impl_->mutex); return impl_->devices; }
 TelemetrySnapshot BleManager::Snapshot() const { return impl_->store.Get(); }

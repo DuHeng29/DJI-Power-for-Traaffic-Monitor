@@ -8,7 +8,7 @@ TrafficMonitor -> DJIPowerPlugin.dll -> Windows BLE -> DJI Power
 
 ## 已实现
 
-- 扫描附近广播 DJI Power Service UUID 的设备
+- 无过滤扫描后综合设备名、DJI 厂商数据、Service UUID 和已保存地址识别电源
 - 手工填写 32 字符十六进制 `pair_key`
 - `0x5A/0x6A` 两步挑战鉴权
 - 长连接接收约 1 Hz 的 `0x5A/0x61` 遥测推送
@@ -63,6 +63,12 @@ member token 只在请求期间驻留内存，不会写入配置。账号密码�
 - DUML 编解码、分包和遥测解析测试通过
 - DLL 加载、`TMPluginGetInstance` 导出及五个项目枚举测试通过
 - 实机 BLE、型号差异和长期重连仍需连接真实 DJI Power 验证
+
+可使用与插件共用同一 BLE 管理器的诊断程序验证扫描：
+
+```powershell
+.\build\bin\Release\ble_scan_probe.exe
+```
 
 ## 许可边界
 
