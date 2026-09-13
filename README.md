@@ -54,7 +54,7 @@ TrafficMonitor/plugins/DJIPowerPlugin/DJIPowerPlugin.dll
 配置页提供两种方式：
 
 1. 粘贴已有 `pair_key`。
-2. 点击“账号登录”，输入 DJI Home 账号、密码和图片验证码；插件使用短期区域 Member Token 查询绑定设备。若返回多台设备，可按名称和序列号选择需要绑定的一台。
+2. 点击“账号登录”，输入 DJI Home 账号、密码和图片验证码；插件使用短期区域 Member Token 查询绑定设备。查询完成后始终打开独立设备选择窗口，并按名称和序列号确认要绑定的设备，即使账号只返回一台。
 
 账号密码、验证码、验证码票据和区域 Member Token 只在登录窗口生命周期内驻留内存，使用后主动清除；插件只持久化经当前 Windows 用户 DPAPI 加密的 `pair_key`。
 

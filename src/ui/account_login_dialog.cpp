@@ -128,14 +128,12 @@ private:
     HWND verify_code_{};
     HWND status_caption_{};
     HWND status_{};
-    HWND device_select_{};
     HWND login_button_{};
     HFONT font_{};
     HFONT bold_font_{};
     HBITMAP captcha_bitmap_{};
     UINT dpi_{96};
     bool uninitialize_com_{};
-    bool selecting_device_{};
     AccountLoginSession login_;
     std::vector<CloudDevice> devices_;
 
@@ -217,10 +215,6 @@ private:
         status_caption_ = Add(L"STATIC", L"状态：", SS_LEFT, 28, 174, 70, 20);
         status_ = Add(L"STATIC", L"正在加载 DJI Home 验证码…", SS_LEFT,
                       105, 174, 439, 20, IDC_STATUS);
-        device_select_ = Add(WC_COMBOBOXW, L"",
-            CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-            105, 168, 335, 120, IDC_DEVICE_SELECT);
-        ShowWindow(device_select_, SW_HIDE);
 
         login_button_ = Add(L"BUTTON", L"登录并获取 Key",
                             BS_DEFPUSHBUTTON | WS_TABSTOP,
@@ -273,19 +267,6 @@ private:
     }
 
     void Login() {
-        if (selecting_device_) {
-            const auto selected = static_cast<int>(
-                SendMessageW(device_select_, CB_GETCURSEL, 0, 0));
-            if (selected < 0 || static_cast<std::size_t>(selected) >= devices_.size()) {
-                MessageBoxW(hwnd_, L"请选择要绑定的 DJI Power。", L"选择设备", MB_ICONWARNING);
-                return;
-            }
-            auto chosen = std::move(devices_[static_cast<std::size_t>(selected)]);
-            devices_.clear();
-            devices_.push_back(std::move(chosen));
-            DestroyWindow(hwnd_);
-            return;
-        }
 
         auto account = ReadText(account_, 256);
         auto password = ReadText(password_, 256);
@@ -313,27 +294,8 @@ private:
         SetWindowTextW(password_, L"");
         SetWindowTextW(verify_code_, L"");
         SetWindowTextW(image_code_, L"");
-        if (devices_.size() == 1) {
-            SetStatus(L"设备 Pair Key 获取成功。");
-            DestroyWindow(hwnd_);
-            return;
-        }
-
-        // 一个账号可能绑定多台电源，必须由用户明确选择，不能静默使用第一项。
-        SendMessageW(device_select_, CB_RESETCONTENT, 0, 0);
-        for (const auto& device : devices_) {
-            auto label = device.name;
-            if (!device.serial_number.empty()) label += L"  [" + device.serial_number + L"]";
-            SendMessageW(device_select_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-        }
-        SendMessageW(device_select_, CB_SETCURSEL, 0, 0);
-        selecting_device_ = true;
-        SetWindowTextW(status_caption_, L"设备：");
-        ShowWindow(status_, SW_HIDE);
-        ShowWindow(device_select_, SW_SHOW);
-        SetWindowTextW(login_button_, L"使用所选 Key");
-        EnableWindow(login_button_, TRUE);
-        SetFocus(device_select_);
+        SetStatus(L"设备列表获取成功。");
+        DestroyWindow(hwnd_);
     }
 
     LRESULT Handle(UINT message, WPARAM wp, LPARAM lp) {
@@ -368,10 +330,185 @@ private:
         return DefWindowProcW(hwnd_, message, wp, lp);
     }
 };
+
+// 登录完成后始终使用独立窗口确认设备，即使账号只返回一台设备。
+class DeviceSelectionWindow {
+public:
+    DeviceSelectionWindow(HWND parent, std::vector<CloudDevice> devices)
+        : parent_(parent), devices_(std::move(devices)) {}
+
+    std::vector<CloudDevice> Show() {
+        WNDCLASSW window_class{};
+        window_class.lpfnWndProc = WndProc;
+        window_class.hInstance = g_module;
+        window_class.lpszClassName = L"DJIPowerDeviceSelectionWindowV1";
+        window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        window_class.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+        RegisterClassW(&window_class);
+
+        constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN;
+        hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, window_class.lpszClassName,
+            L"选择 DJI Power 设备", style, CW_USEDEFAULT, CW_USEDEFAULT,
+            570, 172, parent_, nullptr, g_module, this);
+        if (!hwnd_) {
+            WipeDevices();
+            return {};
+        }
+        CenterAndShow();
+        if (parent_) EnableWindow(parent_, FALSE);
+        MSG message{};
+        while (IsWindow(hwnd_) && GetMessageW(&message, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(hwnd_, &message)) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        if (parent_) {
+            EnableWindow(parent_, TRUE);
+            SetForegroundWindow(parent_);
+        }
+        return std::move(result_);
+    }
+
+private:
+    HWND parent_{};
+    HWND hwnd_{};
+    HWND device_{};
+    HFONT font_{};
+    HFONT bold_font_{};
+    UINT dpi_{96};
+    std::vector<CloudDevice> devices_;
+    std::vector<CloudDevice> result_;
+
+    int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
+
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+        auto* self = reinterpret_cast<DeviceSelectionWindow*>(
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            self = static_cast<DeviceSelectionWindow*>(
+                reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            self->hwnd_ = hwnd;
+        }
+        return self ? self->Handle(message, wp, lp) : DefWindowProcW(hwnd, message, wp, lp);
+    }
+
+    HWND Add(const wchar_t* type, const wchar_t* text, DWORD style,
+             int x, int y, int width, int height, int id = 0, HFONT font = nullptr) {
+        const auto control = CreateWindowExW(0, type, text, WS_CHILD | WS_VISIBLE | style,
+            Scale(x), Scale(y), Scale(width), Scale(height), hwnd_,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_module, nullptr);
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : font_), TRUE);
+        SetWindowTheme(control, L"Explorer", nullptr);
+        return control;
+    }
+
+    void CenterAndShow() {
+        RECT window{};
+        GetWindowRect(hwnd_, &window);
+        RECT owner{};
+        if (!parent_ || !GetWindowRect(parent_, &owner)) {
+            owner = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+        }
+        SetWindowPos(hwnd_, nullptr,
+            owner.left + ((owner.right - owner.left) - (window.right - window.left)) / 2,
+            owner.top + ((owner.bottom - owner.top) - (window.bottom - window.top)) / 2,
+            0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    }
+
+    void Build() {
+        dpi_ = GetDpiForWindow(hwnd_);
+        const auto make_font = [&](int weight) {
+            return CreateFontW(-MulDiv(9, static_cast<int>(dpi_), 72), 0, 0, 0, weight,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        };
+        font_ = make_font(FW_NORMAL);
+        bold_font_ = make_font(FW_SEMIBOLD);
+
+        RECT desired{0, 0, Scale(570), Scale(150)};
+        AdjustWindowRectExForDpi(&desired,
+            WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
+            FALSE, WS_EX_DLGMODALFRAME, dpi_);
+        SetWindowPos(hwnd_, nullptr, 0, 0, desired.right - desired.left,
+            desired.bottom - desired.top, SWP_NOMOVE | SWP_NOZORDER);
+
+        Add(L"BUTTON", L"绑定设备", BS_GROUPBOX, 12, 10, 546, 82, 0, bold_font_);
+        Add(L"STATIC", L"设备：", SS_LEFT, 28, 40, 70, 20);
+        device_ = Add(WC_COMBOBOXW, L"",
+            CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
+            105, 35, 439, 160, IDC_DEVICE_SELECT);
+        for (const auto& item : devices_) {
+            auto label = item.name;
+            if (!item.serial_number.empty()) label += L"  [" + item.serial_number + L"]";
+            SendMessageW(device_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        SendMessageW(device_, CB_SETCURSEL, 0, 0);
+
+        Add(L"STATIC", L"请选择要写入插件设置的设备凭据。",
+            SS_LEFT, 105, 66, 439, 18);
+        Add(L"BUTTON", L"使用所选 Key", BS_DEFPUSHBUTTON | WS_TABSTOP,
+            340, 108, 126, 27, IDOK);
+        Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
+            474, 108, 76, 27, IDCANCEL);
+        SetFocus(device_);
+    }
+
+    void Confirm() {
+        const auto selected = static_cast<int>(SendMessageW(device_, CB_GETCURSEL, 0, 0));
+        if (selected < 0 || static_cast<std::size_t>(selected) >= devices_.size()) {
+            MessageBoxW(hwnd_, L"请选择要绑定的 DJI Power。", L"选择设备", MB_ICONWARNING);
+            return;
+        }
+        auto chosen = std::move(devices_[static_cast<std::size_t>(selected)]);
+        WipeDevices();
+        result_.push_back(std::move(chosen));
+        DestroyWindow(hwnd_);
+    }
+
+    void WipeDevices() {
+        for (auto& item : devices_) {
+            if (!item.pair_key.empty()) {
+                SecureZeroMemory(item.pair_key.data(), item.pair_key.size());
+            }
+        }
+        devices_.clear();
+    }
+
+    LRESULT Handle(UINT message, WPARAM wp, LPARAM lp) {
+        switch (message) {
+        case WM_CREATE: Build(); return 0;
+        case WM_CTLCOLORSTATIC: {
+            const auto dc = reinterpret_cast<HDC>(wp);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        case WM_COMMAND:
+            if (LOWORD(wp) == IDOK) { Confirm(); return 0; }
+            if (LOWORD(wp) == IDCANCEL) { DestroyWindow(hwnd_); return 0; }
+            break;
+        case WM_CLOSE: DestroyWindow(hwnd_); return 0;
+        case WM_DESTROY:
+            WipeDevices();
+            DeleteObject(font_);
+            DeleteObject(bold_font_);
+            return 0;
+        default: break;
+        }
+        return DefWindowProcW(hwnd_, message, wp, lp);
+    }
+};
 } // namespace
 
 std::vector<CloudDevice> ShowAccountLoginDialog(HWND parent) {
-    AccountLoginWindow window(parent);
-    return window.Show();
+    AccountLoginWindow login_window(parent);
+    auto devices = login_window.Show();
+    if (devices.empty()) return {};
+
+    DeviceSelectionWindow selection_window(parent, std::move(devices));
+    return selection_window.Show();
 }
 } // namespace dji_power
