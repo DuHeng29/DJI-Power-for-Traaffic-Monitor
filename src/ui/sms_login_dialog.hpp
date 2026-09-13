@@ -6,5 +6,6 @@
 #include <vector>
 
 namespace dji_power {
-std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent);
+inline constexpr UINT WM_DJI_AUTH_DEBUG_FETCH = WM_APP + 32;
+std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent, bool debug_mode = false);
 } // namespace dji_power

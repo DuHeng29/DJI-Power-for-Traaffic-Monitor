@@ -186,7 +186,8 @@ void MergeCookies(std::wstring& cookie_header, std::wstring_view raw_headers) {
 bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view path,
              const std::wstring& extra_headers, std::string_view body,
              std::wstring& cookies, HttpResponse& response, std::wstring& error,
-             std::wstring_view accept = L"application/json") {
+             std::wstring_view accept = L"application/json", bool follow_redirects = true) {
+    response = {};
     InternetHandle session(WinHttpOpen(L"DJIPowerTrafficMonitor/0.3", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                        nullptr, nullptr, 0));
     if (!session.value) { error = L"无法初始化 WinHTTP"; return false; }
@@ -195,6 +196,10 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
     InternetHandle request(connection.value ? WinHttpOpenRequest(connection.value, std::wstring(method).c_str(),
         std::wstring(path).c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr);
     if (!request.value) { error = L"无法创建 HTTPS 请求"; return false; }
+    if (!follow_redirects) {
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        WinHttpSetOption(request.value, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
+    }
 
     std::wstring headers = L"Accept: " + std::wstring(accept) +
         L"\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) DJI-Power-Plugin\r\n";
@@ -230,7 +235,8 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
         if (!WinHttpReadData(request.value, response.body.data() + old_size, available, &bytes_read)) { ok = false; break; }
         response.body.resize(old_size + bytes_read);
     }
-    if (!ok || response.status < 200 || response.status >= 300) {
+    const bool accepted_redirect = !follow_redirects && response.status >= 300 && response.status < 400;
+    if (!ok || (!accepted_redirect && (response.status < 200 || response.status >= 300))) {
         error = response.status == 429 ? L"DJI 请求过于频繁，请稍后重试" : L"DJI 账号服务请求失败";
         return false;
     }
@@ -295,6 +301,38 @@ bool IsTrustedDjiHost(std::wstring_view host) {
     return matches(L"dji.com") || matches(L"djigate.com");
 }
 
+std::wstring HeaderValue(std::wstring_view raw_headers, std::wstring_view name) {
+    const auto prefix = std::wstring(name) + L":";
+    std::size_t cursor = 0;
+    while (cursor < raw_headers.size()) {
+        const auto end = raw_headers.find(L"\r\n", cursor);
+        auto line = raw_headers.substr(cursor, end == std::wstring_view::npos
+            ? raw_headers.size() - cursor : end - cursor);
+        if (line.size() >= prefix.size() &&
+            _wcsnicmp(line.data(), prefix.data(), prefix.size()) == 0) {
+            line.remove_prefix(prefix.size());
+            while (!line.empty() && (line.front() == L' ' || line.front() == L'\t')) line.remove_prefix(1);
+            return std::wstring(line);
+        }
+        if (end == std::wstring_view::npos) break;
+        cursor = end + 2;
+    }
+    return {};
+}
+
+std::wstring ResolveRedirect(std::wstring_view host, std::wstring_view path,
+                             std::wstring_view location) {
+    if (location.starts_with(L"https://")) return std::wstring(location);
+    if (location.starts_with(L"//")) return L"https:" + std::wstring(location);
+    const auto origin = L"https://" + std::wstring(host);
+    if (location.starts_with(L"/")) return origin + std::wstring(location);
+    auto base = std::wstring(path);
+    const auto query = base.find_first_of(L"?#");
+    if (query != std::wstring::npos) base.erase(query);
+    const auto slash = base.find_last_of(L'/');
+    base.erase(slash == std::wstring::npos ? 0 : slash + 1);
+    return origin + base + std::wstring(location);
+}
 
 bool ApiSucceeded(const HttpResponse& response, std::wstring& error, std::wstring_view fallback) {
     const auto json = Text(response);
@@ -438,37 +476,48 @@ public:
             return {};
         }
 
-        std::wstring host;
-        std::wstring path;
-        if (!CrackHttpsUrl(login.callback_url, host, path)) {
-            error = L"DJI 返回的登录回调地址不是有效的 HTTPS 地址";
-            return {};
-        }
-        if (!IsTrustedDjiHost(host)) {
-            error = L"为保护登录票据，已拒绝非 DJI 域名的回调地址";
-            return {};
-        }
-
-        // 跨域回调仅依赖一次性 URL 票据，绝不把 account.dji.com Cookie 泄露给其他域名。
-        std::wstring callback_cookies = _wcsicmp(host.c_str(), kAccountHost.data()) == 0
-            ? login.cookies : std::wstring{};
-        HttpResponse callback;
-        if (!Request(host, L"GET", path, {}, {}, callback_cookies, callback, error,
-                     L"text/html,application/json,*/*")) {
-            return {};
-        }
-
         std::string member_token;
-        const std::array candidates{
-            Utf8(login.callback_url), Utf8(login.cookies), Text(callback),
-            Utf8(callback.raw_headers), Utf8(callback_cookies)};
-        for (const auto& candidate : candidates) {
-            member_token = cloud_detail::ExtractMemberToken(candidate);
+        std::wstring current_url = login.callback_url;
+        std::wstring final_host;
+        std::map<std::wstring, std::wstring> cookie_jars;
+        cookie_jars[std::wstring(kAccountHost)] = login.cookies;
+        std::size_t followed_redirects = 0;
+
+        // 禁用 WinHTTP 自动跳转，逐跳检查 Location 和 Set-Cookie，避免登录票据在中间响应中丢失。
+        for (std::size_t hop = 0; hop < 8; ++hop) {
+            std::wstring host;
+            std::wstring path;
+            if (!CrackHttpsUrl(current_url, host, path)) {
+                error = L"DJI 返回的登录回调地址不是有效的 HTTPS 地址";
+                return {};
+            }
+            if (!IsTrustedDjiHost(host)) {
+                error = L"为保护登录票据，已拒绝非 DJI 域名的回调地址";
+                return {};
+            }
+            final_host = host;
+            auto& callback_cookies = cookie_jars[host];
+            HttpResponse callback;
+            if (!Request(host, L"GET", path, {}, {}, callback_cookies, callback, error,
+                         L"text/html,application/json,*/*", false)) {
+                return {};
+            }
+
+            const auto location = HeaderValue(callback.raw_headers, L"Location");
+            const std::array candidates{
+                Utf8(current_url), Text(callback), Utf8(callback.raw_headers), Utf8(callback_cookies)};
+            for (const auto& candidate : candidates) {
+                member_token = cloud_detail::ExtractMemberToken(candidate);
+                if (!member_token.empty()) break;
+            }
             if (!member_token.empty()) break;
+            if (callback.status < 300 || callback.status >= 400 || location.empty()) break;
+            current_url = ResolveRedirect(host, path, location);
+            ++followed_redirects;
         }
         if (member_token.empty()) {
-            error = L"登录回调已完成，但网页会话没有提供 DJI Home Member Token（回调主机：" +
-                host + L"）";
+            error = L"登录回调已完成，但重定向链没有提供 DJI Home Member Token（跳转 " +
+                std::to_wstring(followed_redirects) + L" 次，最终主机：" + final_host + L"）";
             return {};
         }
 

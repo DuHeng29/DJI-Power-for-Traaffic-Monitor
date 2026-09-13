@@ -93,7 +93,7 @@ bool DigitsOnly(std::wstring_view value, std::size_t minimum, std::size_t maximu
 
 class SmsLoginWindow {
 public:
-    explicit SmsLoginWindow(HWND parent) : parent_(parent) {}
+    SmsLoginWindow(HWND parent, bool debug_mode) : parent_(parent), debug_mode_(debug_mode) {}
 
     std::vector<CloudDevice> Show() {
         const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -108,7 +108,8 @@ public:
         RegisterClassW(&window_class);
 
         hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, window_class.lpszClassName,
-            L"DJI 账号短信登录", WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
+            debug_mode_ ? L"DJI 账号短信登录（调试会话）" : L"DJI 账号短信登录",
+            WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, 480, 300, parent_, nullptr, g_module, this);
         if (!hwnd_) {
             if (uninitialize_com_) CoUninitialize();
@@ -131,6 +132,7 @@ public:
 
 private:
     HWND parent_{};
+    bool debug_mode_{};
     HWND hwnd_{};
     HWND area_{};
     HWND phone_{};
@@ -382,19 +384,24 @@ private:
             L"登录成功", MB_ICONINFORMATION);
     }
 
-    void FetchKey() {
+    bool FetchKey(bool interactive = true) {
         EnableWindow(fetch_button_, FALSE);
         SetStatus(L"正在完成登录回调并查询设备 Key…");
         std::wstring error;
         devices_ = DefaultPairKeyProvider().FetchAfterWebLogin(login_, error);
         if (devices_.empty()) {
             SetStatus(error);
-            MessageBoxW(hwnd_, error.c_str(), L"获取 Key 失败", MB_ICONERROR);
+            if (interactive) MessageBoxW(hwnd_, error.c_str(), L"获取 Key 失败", MB_ICONERROR);
             EnableWindow(fetch_button_, TRUE);
-            return;
+            return false;
         }
         SetStatus(L"设备 Key 获取成功。");
-        DestroyWindow(hwnd_);
+        if (debug_mode_) {
+            EnableWindow(fetch_button_, TRUE);
+        } else {
+            DestroyWindow(hwnd_);
+        }
+        return true;
     }
 
     void UpdateCountdown() {
@@ -412,6 +419,7 @@ private:
     LRESULT Handle(UINT message, WPARAM wp, LPARAM lp) {
         switch (message) {
         case WM_CREATE: Build(); return 0;
+        case WM_DJI_AUTH_DEBUG_FETCH: return debug_mode_ && FetchKey(false) ? 1 : 0;
         case WM_DJI_INITIALIZE_LOGIN: LoadSession(); return 0;
         case WM_TIMER: if (wp == 2) UpdateCountdown(); return 0;
         case WM_COMMAND:
@@ -439,8 +447,8 @@ private:
 };
 } // namespace
 
-std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent) {
-    SmsLoginWindow window(parent);
+std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent, bool debug_mode) {
+    SmsLoginWindow window(parent, debug_mode);
     return window.Show();
 }
 } // namespace dji_power

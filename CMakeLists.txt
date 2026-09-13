@@ -67,6 +67,24 @@ target_include_directories(cloud_login_probe PRIVATE src)
 target_compile_definitions(cloud_login_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(cloud_login_probe PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cloud_login_probe PRIVATE winhttp ole32)
+# 独立认证调试进程：允许真实用户完成登录，并在窗口存活期间保留内存会话。
+add_executable(dji_auth_debug WIN32
+    tools/auth_debug_main.cpp
+    src/cloud/pair_key_provider.cpp
+    src/ui/sms_login_dialog.cpp)
+target_include_directories(dji_auth_debug PRIVATE src)
+target_compile_definitions(dji_auth_debug PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(dji_auth_debug PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(dji_auth_debug PRIVATE winhttp comctl32 windowscodecs ole32)
+set_target_properties(dji_auth_debug PROPERTIES OUTPUT_NAME "DJI认证调试器")
+
+# 控制端仅能触发预定义的安全操作，并读取不含凭据的状态文本。
+add_executable(dji_auth_ctl tools/auth_debug_control.cpp)
+target_include_directories(dji_auth_ctl PRIVATE src)
+target_compile_definitions(dji_auth_ctl PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(dji_auth_ctl PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(dji_auth_ctl PRIVATE user32)
+
 
 include(CTest)
 if(BUILD_TESTING)
