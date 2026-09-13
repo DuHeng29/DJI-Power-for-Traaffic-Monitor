@@ -39,10 +39,10 @@ const wchar_t* Plugin::GetInfo(PluginInfoIndex index) {
     switch (index) {
     case TMI_NAME: return L"DJI Power for TrafficMonitor";
     case TMI_DESCRIPTION: return L"通过本地 BLE 显示 DJI Power 实时电量与功率";
-    case TMI_AUTHOR: return L"Community";
-    case TMI_COPYRIGHT: return L"Unofficial community project";
+    case TMI_AUTHOR: return L"DuHeng29";
+    case TMI_COPYRIGHT: return L"Copyright (c) 2026 DuHeng29";
     case TMI_VERSION: return L"0.3.0";
-    case TMI_URL: return L"";
+    case TMI_URL: return L"https://github.com/DuHeng29/DJI-Power-for-Traaffic-Monitor";
     default: return L"";
     }
 }
