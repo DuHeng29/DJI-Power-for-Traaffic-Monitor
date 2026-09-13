@@ -1,8 +1,10 @@
-// 本文件通过 WinHTTP 完成 DJI 官方网页短信登录，并用临时 member token 查询设备 pair_key。
+// 本文件通过 WinHTTP 完成 DJI Home 账号登录，并用短期区域 Member Token 查询设备 Pair Key。
 #include "cloud/pair_key_provider.hpp"
 
 #include <windows.h>
+#include <bcrypt.h>
 #include <objbase.h>
+#include <wincrypt.h>
 #include <winhttp.h>
 
 #include <algorithm>
@@ -11,10 +13,19 @@
 #include <cctype>
 #include <cstdio>
 #include <map>
+#include <span>
 #include <string_view>
 
 namespace dji_power {
 namespace {
+
+bool IsMemberToken(std::string_view value) {
+    // DJI Home Token 使用区域前缀（例如 US_、CN_）；兼容其他大写区域码。
+    const auto separator = value.find('_');
+    if (separator < 2 || separator > 8 || separator + 1 >= value.size()) return false;
+    return std::all_of(value.begin(), value.begin() + static_cast<std::ptrdiff_t>(separator),
+        [](unsigned char character) { return character >= 'A' && character <= 'Z'; });
+}
 
 bool IsPairKey(std::string_view value) {
     return value.size() == 32 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
@@ -24,6 +35,9 @@ bool IsPairKey(std::string_view value) {
 
 constexpr std::wstring_view kAccountHost = L"account.dji.com";
 constexpr std::wstring_view kInitialSessionRandom = L"1qazXSW@#EDC4rfv!$&";
+constexpr std::string_view kSignMcKey = "43421d0a-c0bf-4467-9542-3159cc6000cb";
+constexpr std::wstring_view kMobileApiPrefix = L"/apis/apprest/v1/";
+constexpr std::string_view kMobileAppId = "cr-app";
 constexpr std::size_t kMaximumResponseSize = 4U * 1024U * 1024U;
 
 struct InternetHandle {
@@ -188,7 +202,7 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
              std::wstring& cookies, HttpResponse& response, std::wstring& error,
              std::wstring_view accept = L"application/json", bool follow_redirects = true) {
     response = {};
-    InternetHandle session(WinHttpOpen(L"DJIPowerTrafficMonitor/0.3", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    InternetHandle session(WinHttpOpen(L"DJIHome/1.5.16 (Android)", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                        nullptr, nullptr, 0));
     if (!session.value) { error = L"无法初始化 WinHTTP"; return false; }
     WinHttpSetTimeouts(session.value, 10000, 10000, 10000, 15000);
@@ -201,15 +215,49 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
         WinHttpSetOption(request.value, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
     }
 
-    std::wstring headers = L"Accept: " + std::wstring(accept) +
-        L"\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) DJI-Power-Plugin\r\n";
+    std::wstring headers = L"Accept: " + std::wstring(accept) + L"\r\n";
+    if (extra_headers.find(L"User-Agent:") == std::wstring::npos) {
+        headers += L"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) DJI-Power-Plugin\r\n";
+    }
     if (!cookies.empty()) headers += L"Cookie: " + cookies + L"\r\n";
     headers += extra_headers;
+    // 先显式注册自定义 *-Mc 请求头，避免 WinHttpSendRequest 合并头部时丢失移动端公共参数。
+    DWORD transport_error = ERROR_SUCCESS;
+    bool ok = WinHttpAddRequestHeaders(
+        request.value, headers.c_str(), static_cast<DWORD>(-1L),
+        WINHTTP_ADDREQ_FLAG_ADD) != FALSE;
+    if (!ok) transport_error = GetLastError();
+    if (ok && extra_headers.find(L"AppId-Mc:") != std::wstring::npos) {
+        DWORD request_headers_size = 0;
+        WinHttpQueryHeaders(request.value,
+            WINHTTP_QUERY_RAW_HEADERS_CRLF | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+            WINHTTP_HEADER_NAME_BY_INDEX, nullptr, &request_headers_size, WINHTTP_NO_HEADER_INDEX);
+        std::wstring request_headers(request_headers_size / sizeof(wchar_t), L'\0');
+        if (request_headers_size == 0 ||
+            !WinHttpQueryHeaders(request.value,
+                WINHTTP_QUERY_RAW_HEADERS_CRLF | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+                WINHTTP_HEADER_NAME_BY_INDEX, request_headers.data(),
+                &request_headers_size, WINHTTP_NO_HEADER_INDEX)) {
+            error = L"DJI_HEADER_CHECK=query_failed";
+            return false;
+        }
+        const int mask =
+            (request_headers.find(L"AppId-Mc: cr-app") != std::wstring::npos ? 1 : 0) |
+            (request_headers.find(L"ClientName-Mc: android-1.5.16") != std::wstring::npos ? 2 : 0) |
+            (request_headers.find(L"Sign-Mc: ") != std::wstring::npos ? 4 : 0);
+        if (mask != 7) {
+            error = L"DJI_HEADER_CHECK=" + std::to_wstring(mask);
+            return false;
+        }
+    }
     const auto body_size = static_cast<DWORD>(body.size());
     void* body_pointer = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
-    bool ok = WinHttpSendRequest(request.value, headers.c_str(), static_cast<DWORD>(-1L),
-                                 body_pointer, body_size, body_size, 0) &&
-              WinHttpReceiveResponse(request.value, nullptr);
+    if (ok) {
+        ok = WinHttpSendRequest(request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                body_pointer, body_size, body_size, 0) &&
+             WinHttpReceiveResponse(request.value, nullptr);
+        if (!ok) transport_error = GetLastError();
+    }
     DWORD status_size = sizeof(response.status);
     if (ok) ok = WinHttpQueryHeaders(request.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                      nullptr, &response.status, &status_size, nullptr) != FALSE;
@@ -238,6 +286,9 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
     const bool accepted_redirect = !follow_redirects && response.status >= 300 && response.status < 400;
     if (!ok || (!accepted_redirect && (response.status < 200 || response.status >= 300))) {
         error = response.status == 429 ? L"DJI 请求过于频繁，请稍后重试" : L"DJI 账号服务请求失败";
+        if (!ok && transport_error != ERROR_SUCCESS) {
+            error += L"（WinHTTP " + std::to_wstring(transport_error) + L"）";
+        }
         return false;
     }
     return true;
@@ -263,6 +314,75 @@ std::string RandomHex() {
         result.push_back(hex[bytes[i] & 0x0F]);
     }
     return result;
+}
+std::string Base64(std::span<const std::uint8_t> bytes) {
+    DWORD size = 0;
+    if (!CryptBinaryToStringA(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size)) return {};
+    std::string result(size, '\0');
+    if (!CryptBinaryToStringA(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, result.data(), &size)) return {};
+    if (!result.empty() && result.back() == '\0') result.pop_back();
+    return result;
+}
+
+std::string HmacSha1Base64(std::string_view key, std::string_view material) {
+    BCRYPT_ALG_HANDLE algorithm{};
+    BCRYPT_HASH_HANDLE hash{};
+    DWORD object_size = 0;
+    DWORD returned = 0;
+    std::vector<std::uint8_t> object;
+    std::array<std::uint8_t, 20> digest{};
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA1_ALGORITHM, nullptr,
+                                    BCRYPT_ALG_HANDLE_HMAC_FLAG) < 0 ||
+        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                          reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size),
+                          &returned, 0) < 0) {
+        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+        return {};
+    }
+    object.resize(object_size);
+    const auto created = BCryptCreateHash(
+        algorithm, &hash, object.data(), static_cast<ULONG>(object.size()),
+        reinterpret_cast<PUCHAR>(const_cast<char*>(key.data())),
+        static_cast<ULONG>(key.size()), 0);
+    const auto hashed = created >= 0
+        ? BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(material.data())),
+                         static_cast<ULONG>(material.size()), 0)
+        : static_cast<NTSTATUS>(-1);
+    const auto finished = hashed >= 0
+        ? BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0)
+        : static_cast<NTSTATUS>(-1);
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    return finished >= 0 ? Base64(digest) : std::string{};
+}
+
+std::wstring MobileHeaders(const AccountLoginSession& login, bool form) {
+    const auto timestamp = std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    const auto invoke_id = "DeviceId-Mc" + timestamp + RandomHex().substr(0, 6);
+    const auto material = "AppId-Mc" + std::string(kMobileAppId) +
+        "ClientName-Mc" + login.client_name + "DeviceId-Mc" + login.device_id +
+        "InvokeId-Mc" + invoke_id + "Timestamp-Mc" + timestamp;
+    const auto signature = HmacSha1Base64(kSignMcKey, material);
+    std::wstring headers =
+        L"ClientName-Mc: " + Wide(login.client_name) + L"\r\n" +
+        L"DeviceId-Mc: " + Wide(login.device_id) + L"\r\n" +
+        L"AppId-Mc: " + Wide(kMobileAppId) + L"\r\n" +
+        L"Timestamp-Mc: " + Wide(timestamp) + L"\r\n" +
+        L"InvokeId-Mc: " + Wide(invoke_id) + L"\r\n" +
+        L"Sign-Mc: " + Wide(signature) + L"\r\n" +
+        L"X-Risk-Version: 1.0\r\nX-DJI-SDK-Version: 1.0.0\r\n";
+    if (form) headers += L"Content-Type: application/x-www-form-urlencoded\r\n";
+    return headers;
+}
+
+bool MobilePost(const AccountLoginSession& login, std::wstring_view action,
+                std::string_view form, HttpResponse& response, std::wstring& error) {
+    std::wstring cookies;
+    return Request(kAccountHost, L"POST", std::wstring(kMobileApiPrefix) + std::wstring(action),
+                   MobileHeaders(login, true), form, cookies, response, error);
 }
 
 bool CrackHttpsUrl(std::wstring_view url, std::wstring& host, std::wstring& path) {
@@ -348,6 +468,19 @@ std::string JsonStringBefore(std::string_view json, std::size_t before, std::str
     return JsonString(json, key, pos);
 }
 
+std::wstring FriendlyCloudDeviceName(std::string_view raw_name) {
+    auto raw = Wide(raw_name);
+    auto compact = raw;
+    std::transform(compact.begin(), compact.end(), compact.begin(), ::towlower);
+    compact.erase(std::remove_if(compact.begin(), compact.end(), [](wchar_t value) {
+        return value == L' ' || value == L'-' || value == L'_';
+    }), compact.end());
+    if (compact.find(L"power1000mini") != std::wstring::npos) return L"DJI Power 1000 Mini";
+    if (compact.find(L"power1000v2") != std::wstring::npos) return L"DJI Power 1000 V2";
+    if (compact.find(L"power2000") != std::wstring::npos) return L"DJI Power 2000";
+    if (compact.find(L"power1000") != std::wstring::npos) return L"DJI Power 1000";
+    return raw.empty() ? L"DJI Power" : raw;
+}
 std::string DownloadDevices(std::wstring_view host, const std::wstring& token, std::wstring& error) {
     std::wstring unused_cookies;
     HttpResponse response;
@@ -359,8 +492,96 @@ std::string DownloadDevices(std::wstring_view host, const std::wstring& token, s
 
 class WinHttpPairKeyProvider final : public PairKeyProvider {
 public:
+    bool BeginAccountLogin(AccountLoginSession& login,
+                           std::vector<std::uint8_t>& captcha_png,
+                           std::wstring& error) override {
+        login.Clear();
+        login.device_id = "dji-home-" + RandomHex().substr(0, 16);
+        return RefreshAccountCaptcha(login, captcha_png, error);
+    }
+
+    bool RefreshAccountCaptcha(AccountLoginSession& login,
+                               std::vector<std::uint8_t>& captcha_png,
+                               std::wstring& error) override {
+        if (login.device_id.empty()) login.device_id = "dji-home-" + RandomHex().substr(0, 16);
+        login.captcha_random = RandomHex();
+        login.captcha_ticket.clear();
+        const auto path = std::wstring(kMobileApiPrefix) + L"vcode?srandom=" +
+            Wide(login.captcha_random);
+        std::wstring cookies;
+        HttpResponse response;
+        if (!Request(kAccountHost, L"GET", path, MobileHeaders(login, false), {},
+                     cookies, response, error, L"image/*,*/*")) return false;
+        if (response.body.size() < 64) {
+            error = L"DJI Home 图片验证码加载失败";
+            return false;
+        }
+        captcha_png = std::move(response.body);
+        return true;
+    }
+
+    std::vector<CloudDevice> LoginAndFetch(
+        AccountLoginSession& login, const std::wstring& account,
+        const std::wstring& password, const std::wstring& image_code,
+        const std::wstring& verification_code, std::wstring& error) override {
+        if (login.captcha_ticket.empty()) {
+            std::string captcha_form;
+            AppendForm(captcha_form, "captchaType", "imageCaptcha");
+            AppendForm(captcha_form, "captchaModule", "AppLogin");
+            AppendForm(captcha_form, "verificationCode", Utf8(image_code));
+            AppendForm(captcha_form, "srandom", login.captcha_random);
+            HttpResponse captcha;
+            if (!MobilePost(login, L"validate_captcha", captcha_form, captcha, error) ||
+                !ApiSucceeded(captcha, error, L"图片验证码错误")) return {};
+            login.captcha_ticket = JsonString(Text(captcha), "captchaTicket");
+            if (login.captcha_ticket.empty()) {
+                error = L"DJI Home 未返回验证码票据";
+                return {};
+            }
+        }
+
+        std::string login_form;
+        AppendForm(login_form, "userName", Utf8(account));
+        AppendForm(login_form, "password", Utf8(password));
+        AppendForm(login_form, "captchaTicket", login.captcha_ticket);
+        if (!verification_code.empty()) {
+            AppendForm(login_form, "emailCode", Utf8(verification_code));
+            AppendForm(login_form, "verificationCode", Utf8(verification_code));
+        }
+        HttpResponse response;
+        const bool requested = MobilePost(login, L"user_login", login_form, response, error);
+        if (!login_form.empty()) SecureZeroMemory(login_form.data(), login_form.size());
+        if (!requested) return {};
+
+        const auto json = Text(response);
+        const int code = JsonCode(json);
+        if (code == 553 || code == 556) {
+            error = L"DJI 要求二次验证，请输入收到的验证码后再次登录";
+            return {};
+        }
+        if (code == 508 || code == 554) {
+            error = L"DJI 验证请求过于频繁，请稍后再试";
+            return {};
+        }
+        if (!ApiSucceeded(response, error, L"DJI Home 登录失败")) return {};
+        auto token = JsonString(json, "token");
+        if (!IsMemberToken(token)) {
+            error = L"登录成功，但响应中没有 DJI Home Member Token";
+            return {};
+        }
+        auto wide_token = Wide(token);
+        // 窄字符串中的 Member Token 不再使用，立即擦除其内存副本。
+        SecureZeroMemory(token.data(), token.size());
+        auto devices = FetchWithMemberToken(wide_token, error);
+        if (!wide_token.empty()) SecureZeroMemory(wide_token.data(), wide_token.size() * sizeof(wchar_t));
+        if (!devices.empty()) login.Clear();
+        return devices;
+    }
     std::vector<CloudDevice> FetchWithMemberToken(const std::wstring& token, std::wstring& error) override {
-        if (!token.starts_with(L"US_")) { error = L"Member Token 应以 US_ 开头"; return {}; }
+        if (!IsMemberToken(Utf8(token))) {
+            error = L"Member Token 缺少有效的 DJI 区域前缀";
+            return {};
+        }
         static constexpr std::array hosts{L"home-api.djigate.com", L"home-api-vg.djigate.com", L"home-api-hz.djigate.com"};
         std::string json;
         for (const auto* host : hosts) {
@@ -530,6 +751,19 @@ public:
     }
 };
 } // namespace
+void AccountLoginSession::Clear() noexcept {
+    const auto wipe = [](std::string& value) {
+        if (!value.empty()) SecureZeroMemory(value.data(), value.size());
+        value.clear();
+    };
+    // ClientName 是协议常量而非凭据，重用会话时必须保留。
+    wipe(device_id);
+    wipe(captcha_random);
+    wipe(captcha_ticket);
+}
+
+AccountLoginSession::~AccountLoginSession() { Clear(); }
+
 
 void SmsLoginSession::Clear() noexcept {
     const auto wipe_wide = [](std::wstring& value) {
@@ -551,6 +785,13 @@ void SmsLoginSession::Clear() noexcept {
 SmsLoginSession::~SmsLoginSession() { Clear(); }
 
 namespace cloud_detail {
+std::string BuildMobileSignatureForTest(std::string_view key, std::string_view material) {
+    return HmacSha1Base64(key, material);
+}
+bool IsMemberTokenForTest(std::string_view value) {
+    return IsMemberToken(value);
+}
+
 std::vector<CloudDevice> ParseDevicesJson(std::string_view json) {
     std::vector<CloudDevice> result;
     constexpr std::string_view marker = "\"pair_key\"";
@@ -560,7 +801,7 @@ std::vector<CloudDevice> ParseDevicesJson(std::string_view json) {
         if (IsPairKey(key)) {
             const auto name = JsonStringBefore(json, cursor, "name");
             const auto serial = JsonStringBefore(json, cursor, "sn");
-            result.push_back({name.empty() ? L"DJI Power" : Wide(name), Wide(serial), key});
+            result.push_back({FriendlyCloudDeviceName(name), Wide(serial), key});
         }
         cursor += marker.size();
     }

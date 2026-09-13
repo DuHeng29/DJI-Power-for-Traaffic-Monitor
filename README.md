@@ -15,8 +15,8 @@ TrafficMonitor -> DJIPowerPlugin.dll -> Windows BLE -> DJI Power
 - BLE 断线检测、自动重连和指数退避
 - 原生 Win32 配置与测试连接窗口
 - 电量、输入、输出、净功率、剩余时间五个 TrafficMonitor 项目
-- 支持 DJI 账号图片验证码与短信验证码登录，并识别登录成功回调
-- 登录成功后由用户单独触发网页登录回调和设备 `pair_key` 查询
+- 支持 DJI Home 账号、密码和图片验证码登录，一次性获取 Pair Key
+- 账号绑定多台设备时显示名称与序列号列表，由用户明确选择对应设备
 - 配置保存在 DLL 同目录，`pair_key` 使用当前 Windows 用户 DPAPI 加密
 
 > 本项目是非官方社区项目，与 DJI 无隶属或认可关系。当前版本只发送鉴权和读取请求，不实现电源控制。
@@ -54,19 +54,19 @@ TrafficMonitor/plugins/DJIPowerPlugin/DJIPowerPlugin.dll
 配置页提供两种方式：
 
 1. 粘贴已有 `pair_key`。
-2. 点击“短信登录”完成验证码登录；出现成功提示后，“获取 Key”按钮才会启用。再次点击后，插件完成网页登录回调，并在获得 Home Member Token 时查询设备 `pair_key`。
+2. 点击“账号登录”，输入 DJI Home 账号、密码和图片验证码；插件使用短期区域 Member Token 查询绑定设备。若返回多台设备，可按名称和序列号选择需要绑定的一台。
 
-短信只会在用户明确点击“发送验证码”后发送。账号输入、验证码、Cookie 和回调票据只在登录窗口生命周期内驻留内存，窗口关闭时会主动清除；插件只持久化经 DPAPI 加密的 `pair_key`。
+账号密码、验证码、验证码票据和区域 Member Token 只在登录窗口生命周期内驻留内存，使用后主动清除；插件只持久化经当前 Windows 用户 DPAPI 加密的 `pair_key`。
 
-登录阶段调用 DJI 官方账号网页接口。网页登录回调不保证提供 DJI Home Member Token；若没有，插件会显示回调主机并停止，不会伪造或猜测 Token。已保存 `pair_key` 的本地 BLE 连接不受云端流程变化影响。
+登录阶段调用 DJI Home 移动端账号接口，兼容 `US_`、`CN_` 及其他合法大写区域前缀。已保存 `pair_key` 的本地 BLE 连接不依赖账号或云端。
 
 ## 验证状态
 
 - MSVC Release 构建通过
 - DUML 编解码、分包和遥测解析测试通过
 - DLL 加载、`TMPluginGetInstance` 导出及五个项目枚举测试通过
-- 云端设备列表、网页登录回调、Token 边界和错误返回解析测试通过
-- 短信登录已实测成功；回调兑换、设备 Key 获取、实机 BLE 和长期重连仍需真实账号及 DJI Power 验证
+- 云端多设备列表、区域 Token、移动端签名和错误返回解析测试通过
+- DJI Home 真实账号登录与设备 Pair Key 获取已实测成功；实机 BLE 遥测和长期重连仍需持续验证
 
 可使用与插件共用同一 BLE 管理器的诊断程序验证扫描：
 
@@ -74,7 +74,7 @@ TrafficMonitor/plugins/DJIPowerPlugin/DJIPowerPlugin.dll
 .\build\bin\Release\ble_scan_probe.exe
 ```
 
-也可单独验证登录页、会话初始化和图片验证码下载；该命令不会发送短信：
+也可单独验证登录会话初始化和图片验证码下载；该命令不会提交账号、密码或验证码：
 
 ```powershell
 .\build\bin\Release\cloud_login_probe.exe

@@ -41,7 +41,7 @@ const wchar_t* Plugin::GetInfo(PluginInfoIndex index) {
     case TMI_DESCRIPTION: return L"通过本地 BLE 显示 DJI Power 实时电量与功率";
     case TMI_AUTHOR: return L"Community";
     case TMI_COPYRIGHT: return L"Unofficial community project";
-    case TMI_VERSION: return L"0.2.0";
+    case TMI_VERSION: return L"0.3.0";
     case TMI_URL: return L"";
     default: return L"";
     }

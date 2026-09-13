@@ -42,6 +42,40 @@ std::wstring AddressText(std::uint64_t value) {
         (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF);
     return text;
 }
+std::wstring ModelName(std::uint8_t code) {
+    switch (code) {
+    case 0x91: return L"DJI Power 1000";
+    case 0x97: return L"DJI Power 1000 V2";
+    case 0x98: return L"DJI Power 1000 Mini";
+    case 0x94: return L"DJI Power 2000";
+    default: return {};
+    }
+}
+
+std::wstring FriendlyAdvertisementName(
+    const adv::BluetoothLEAdvertisementReceivedEventArgs& args) {
+    // 厂商数据的型号码比广播名称稳定，优先转换为面向用户的产品名。
+    for (const auto& item : args.Advertisement().ManufacturerData()) {
+        if (item.CompanyId() != 0x08AA) continue;
+        const auto bytes = FromBuffer(item.Data());
+        if (!bytes.empty()) {
+            const auto model = ModelName(bytes.front());
+            if (!model.empty()) return model;
+        }
+    }
+
+    const auto raw = std::wstring(args.Advertisement().LocalName());
+    auto compact = raw;
+    std::transform(compact.begin(), compact.end(), compact.begin(), ::towlower);
+    compact.erase(std::remove_if(compact.begin(), compact.end(), [](wchar_t value) {
+        return value == L' ' || value == L'-' || value == L'_';
+    }), compact.end());
+    if (compact.find(L"power1000mini") != std::wstring::npos) return L"DJI Power 1000 Mini";
+    if (compact.find(L"power1000v2") != std::wstring::npos) return L"DJI Power 1000 V2";
+    if (compact.find(L"power2000") != std::wstring::npos) return L"DJI Power 2000";
+    if (compact.find(L"power1000") != std::wstring::npos) return L"DJI Power 1000";
+    return raw.empty() ? AddressText(args.BluetoothAddress()) : raw;
+}
 bool IsDjiPowerAdvertisement(const adv::BluetoothLEAdvertisementReceivedEventArgs& args,
                              std::uint64_t configured_address) {
     if (configured_address != 0 && args.BluetoothAddress() == configured_address) return true;
@@ -115,7 +149,7 @@ struct BleManager::Impl {
             std::uint64_t configured_address = 0;
             { std::scoped_lock lock(mutex); configured_address = config.bluetooth_address; }
             if (!IsDjiPowerAdvertisement(args, configured_address)) return;
-            const auto name = args.Advertisement().LocalName().empty() ? AddressText(args.BluetoothAddress()) : std::wstring(args.Advertisement().LocalName());
+            const auto name = FriendlyAdvertisementName(args);
             std::scoped_lock lock(mutex);
             const auto found = std::find_if(devices.begin(), devices.end(), [&](const auto& item) { return item.address == args.BluetoothAddress(); });
             if (found == devices.end()) devices.push_back({args.BluetoothAddress(), name, args.RawSignalStrengthInDBm()});

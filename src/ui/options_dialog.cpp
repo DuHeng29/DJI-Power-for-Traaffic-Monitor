@@ -2,7 +2,7 @@
 #include "ui/options_dialog.hpp"
 #include "ble/ble_manager.hpp"
 #include "cloud/pair_key_provider.hpp"
-#include "ui/sms_login_dialog.hpp"
+#include "ui/account_login_dialog.hpp"
 #include "common/config.hpp"
 #include "protocol/duml.hpp"
 
@@ -157,7 +157,7 @@ private:
         pair_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
             105, 128, 335, 24, IDC_PAIR_KEY);
         SendMessageW(pair_, EM_SETPASSWORDCHAR, L'●', 0);
-        Add(L"BUTTON", L"短信登录", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
+        Add(L"BUTTON", L"账号登录", BS_PUSHBUTTON | WS_TABSTOP, 449, 127, 95, 26, IDC_GET_KEY);
 
         Add(L"STATIC", L"登录信息和临时 Token 仅保存在内存中，获取完成后立即清除。",
             SS_LEFT, 105, 162, 439, 18, IDC_SUBTITLE);
@@ -235,8 +235,8 @@ private:
     }
 
     void FetchKey() {
-        // 登录和 Key 查询在子窗口中由用户分两次明确触发。
-        const auto cloud_devices = ShowSmsLoginDialog(hwnd_);
+        // 使用与已验证 Python 工具相同的 DJI Home 移动端登录流程。
+        const auto cloud_devices = ShowAccountLoginDialog(hwnd_);
         if (cloud_devices.empty()) return;
         SetWindowTextA(pair_, cloud_devices.front().pair_key.c_str());
         editing_.device_name = cloud_devices.front().name;

@@ -17,15 +17,26 @@ void Check(bool condition, const char* message) {
 int main() {
     using namespace dji_power::cloud_detail;
 
+    Check(BuildMobileSignatureForTest("test-key", "test-material") ==
+              "7ClZ4RrnFJJtHocTHiKZykIkn1g=", "移动端 HMAC-SHA1 签名应与 Python 一致");
+    Check(IsMemberTokenForTest("US_example"), "应接受 US 区域 Token");
+    Check(IsMemberTokenForTest("CN_example"), "应接受 CN 区域 Token");
+    Check(IsMemberTokenForTest("EU_example"), "应兼容其他 DJI 区域 Token");
+    Check(!IsMemberTokenForTest("token"), "应拒绝没有区域前缀的普通 Token");
+    Check(!IsMemberTokenForTest("us_example"), "区域前缀必须为大写字母");
+
     const auto devices = ParseDevicesJson(R"({"data":{"list":[
-        {"name":"Power 1000 V2","sn":"ABC123","pair_key":"00112233445566778899aabbccddeeff"},
+        {"name":"Power1000Mini-110105","sn":"ABC123","pair_key":"00112233445566778899aabbccddeeff"},
+        {"name":"Power 2000","sn":"DEF456","pair_key":"ffeeddccbbaa99887766554433221100"},
         {"name":"无效设备","sn":"BAD","pair_key":"1234"}
     ]}})");
-    Check(devices.size() == 1, "应仅保留合法 Pair Key 的设备");
+    Check(devices.size() == 2, "应保留账号下所有具有合法 Pair Key 的设备");
     if (!devices.empty()) {
-        Check(devices[0].name == L"Power 1000 V2", "应解析设备名称");
+        Check(devices[0].name == L"DJI Power 1000 Mini", "应将原始名称转换为产品名称");
         Check(devices[0].serial_number == L"ABC123", "应解析序列号");
         Check(devices[0].pair_key == "00112233445566778899aabbccddeeff", "应解析 Pair Key");
+        Check(devices[1].name == L"DJI Power 2000", "应解析第二台设备");
+        Check(devices[1].serial_number == L"DEF456", "应保留第二台设备序列号");
     }
 
     Check(ExtractMemberToken(R"({"data":{"token":"US_example_token"}})") == "US_example_token",
