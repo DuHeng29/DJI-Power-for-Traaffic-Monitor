@@ -59,6 +59,15 @@ target_compile_definitions(ble_scan_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN3
 target_compile_options(ble_scan_probe PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(ble_scan_probe PRIVATE dji_power_core windowsapp)
 
+# 手工联网诊断工具只初始化验证码会话，绝不会发送真实短信。
+add_executable(cloud_login_probe
+    tests/cloud_login_probe.cpp
+    src/cloud/pair_key_provider.cpp)
+target_include_directories(cloud_login_probe PRIVATE src)
+target_compile_definitions(cloud_login_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(cloud_login_probe PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(cloud_login_probe PRIVATE winhttp ole32)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(protocol_tests tests/protocol_tests.cpp)

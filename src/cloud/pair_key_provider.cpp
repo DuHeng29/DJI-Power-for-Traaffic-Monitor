@@ -185,7 +185,8 @@ void MergeCookies(std::wstring& cookie_header, std::wstring_view raw_headers) {
 
 bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view path,
              const std::wstring& extra_headers, std::string_view body,
-             std::wstring& cookies, HttpResponse& response, std::wstring& error) {
+             std::wstring& cookies, HttpResponse& response, std::wstring& error,
+             std::wstring_view accept = L"application/json") {
     InternetHandle session(WinHttpOpen(L"DJIPowerTrafficMonitor/0.3", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                        nullptr, nullptr, 0));
     if (!session.value) { error = L"无法初始化 WinHTTP"; return false; }
@@ -195,7 +196,8 @@ bool Request(std::wstring_view host, std::wstring_view method, std::wstring_view
         std::wstring(path).c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr);
     if (!request.value) { error = L"无法创建 HTTPS 请求"; return false; }
 
-    std::wstring headers = L"Accept: application/json\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) DJI-Power-Plugin\r\n";
+    std::wstring headers = L"Accept: " + std::wstring(accept) +
+        L"\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) DJI-Power-Plugin\r\n";
     if (!cookies.empty()) headers += L"Cookie: " + cookies + L"\r\n";
     headers += extra_headers;
     const auto body_size = static_cast<DWORD>(body.size());
@@ -302,7 +304,8 @@ public:
         login.Clear();
         HttpResponse page;
         if (!Request(kAccountHost, L"GET", L"/login?appId=store&locale=zh_CN&region=CN",
-                     {}, {}, login.cookies, page, error)) return false;
+                     {}, {}, login.cookies, page, error,
+                     L"text/html,application/xhtml+xml")) return false;
         const auto html = Text(page);
         constexpr std::string_view version_marker = "window.__version=\"";
         const auto version_pos = html.find(version_marker);
@@ -333,7 +336,7 @@ public:
         const auto path = L"/user/webrest/v1/vcode.do?appId=store&srandom=" + Wide(login.captcha_random);
         HttpResponse response;
         if (!Request(kAccountHost, L"GET", path, AccountHeaders(login, false), {},
-                     login.cookies, response, error)) return false;
+                     login.cookies, response, error, L"image/avif,image/webp,image/*,*/*")) return false;
         if (response.body.size() < 64) { error = L"DJI 图片验证码加载失败"; return false; }
         captcha_png = std::move(response.body);
         return true;

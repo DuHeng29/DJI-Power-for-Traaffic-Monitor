@@ -74,6 +74,12 @@ TrafficMonitor/plugins/DJIPowerPlugin/DJIPowerPlugin.dll
 .\build\bin\Release\ble_scan_probe.exe
 ```
 
+也可单独验证登录页、会话初始化和图片验证码下载；该命令不会发送短信：
+
+```powershell
+.\build\bin\Release\cloud_login_probe.exe
+```
+
 ## 许可边界
 
 - TrafficMonitor 插件接口从官方项目取得，并按其许可证使用。
