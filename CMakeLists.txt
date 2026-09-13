@@ -76,7 +76,7 @@ add_executable(dji_auth_debug WIN32
 target_include_directories(dji_auth_debug PRIVATE src)
 target_compile_definitions(dji_auth_debug PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(dji_auth_debug PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(dji_auth_debug PRIVATE winhttp comctl32 crypt32 bcrypt windowscodecs ole32)
+target_link_libraries(dji_auth_debug PRIVATE winhttp comctl32 crypt32 bcrypt uxtheme windowscodecs ole32)
 set_target_properties(dji_auth_debug PROPERTIES OUTPUT_NAME "DJI认证调试器")
 
 # 控制端仅能触发预定义的安全操作，并读取不含凭据的状态文本。

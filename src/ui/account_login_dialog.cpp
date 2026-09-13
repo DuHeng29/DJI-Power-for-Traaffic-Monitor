@@ -2,6 +2,7 @@
 #include "ui/account_login_dialog.hpp"
 
 #include <commctrl.h>
+#include <uxtheme.h>
 #include <wincodec.h>
 
 #include <array>
@@ -94,9 +95,9 @@ public:
         WNDCLASSW window_class{};
         window_class.lpfnWndProc = WndProc;
         window_class.hInstance = g_module;
-        window_class.lpszClassName = L"DJIPowerAccountLoginWindowV1";
+        window_class.lpszClassName = L"DJIPowerAccountLoginWindowV2";
         window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        window_class.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
+        window_class.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
         RegisterClassW(&window_class);
 
         hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME, window_class.lpszClassName,
@@ -125,6 +126,7 @@ private:
     HWND image_code_{};
     HWND captcha_image_{};
     HWND verify_code_{};
+    HWND status_caption_{};
     HWND status_{};
     HWND device_select_{};
     HWND login_button_{};
@@ -156,6 +158,7 @@ private:
             Scale(x), Scale(y), Scale(width), Scale(height), hwnd_,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_module, nullptr);
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font ? font : font_), TRUE);
+        SetWindowTheme(control, L"Explorer", nullptr);
         return control;
     }
 
@@ -183,45 +186,47 @@ private:
         font_ = make_font(FW_NORMAL);
         bold_font_ = make_font(FW_SEMIBOLD);
 
-        RECT desired{0, 0, Scale(470), Scale(240)};
+        RECT desired{0, 0, Scale(570), Scale(262)};
         AdjustWindowRectExForDpi(&desired, WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_CLIPCHILDREN,
                                  FALSE, WS_EX_DLGMODALFRAME, dpi_);
         SetWindowPos(hwnd_, nullptr, 0, 0, desired.right - desired.left,
                      desired.bottom - desired.top, SWP_NOMOVE | SWP_NOZORDER);
 
-        Add(L"BUTTON", L"DJI Home 账号", BS_GROUPBOX, 12, 10, 446, 178, 0, bold_font_);
-        Add(L"STATIC", L"账号：", SS_LEFT, 28, 38, 62, 20);
+        // 与主设置页使用同一列网格和控件尺寸，保持紧凑的 Windows 8.1 桌面风格。
+        Add(L"BUTTON", L"DJI Home 账号", BS_GROUPBOX, 12, 10, 546, 192, 0, bold_font_);
+        Add(L"STATIC", L"账号：", SS_LEFT, 28, 38, 70, 20);
         account_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-                       94, 35, 346, 24, IDC_ACCOUNT);
-        Add(L"STATIC", L"密码：", SS_LEFT, 28, 72, 62, 20);
+                       105, 35, 335, 24, IDC_ACCOUNT);
+        Add(L"STATIC", L"密码：", SS_LEFT, 28, 72, 70, 20);
         password_ = Add(L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP,
-                        94, 69, 346, 24, IDC_PASSWORD);
+                        105, 69, 335, 24, IDC_PASSWORD);
 
-        Add(L"STATIC", L"图片码：", SS_LEFT, 28, 106, 62, 20);
+        Add(L"STATIC", L"图片码：", SS_LEFT, 28, 106, 70, 20);
         image_code_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-                          94, 103, 104, 24, IDC_IMAGE_CODE);
+                          105, 103, 104, 24, IDC_IMAGE_CODE);
         captcha_image_ = Add(L"STATIC", L"", SS_BITMAP | SS_CENTERIMAGE | WS_BORDER,
-                             208, 99, 107, 34, IDC_CAPTCHA_IMAGE);
+                             218, 99, 107, 34, IDC_CAPTCHA_IMAGE);
         Add(L"BUTTON", L"换一张", BS_PUSHBUTTON | WS_TABSTOP,
-            326, 102, 76, 26, IDC_REFRESH_CAPTCHA);
+            449, 102, 95, 26, IDC_REFRESH_CAPTCHA);
 
-        Add(L"STATIC", L"二次码：", SS_LEFT, 28, 143, 62, 20);
+        Add(L"STATIC", L"二次码：", SS_LEFT, 28, 143, 70, 20);
         verify_code_ = Add(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
-                           94, 139, 104, 24, IDC_VERIFY_CODE);
+                           105, 139, 104, 24, IDC_VERIFY_CODE);
         Add(L"STATIC", L"仅账号要求二次验证时填写", SS_LEFT,
-            208, 143, 220, 20);
+            218, 143, 222, 20);
+        status_caption_ = Add(L"STATIC", L"状态：", SS_LEFT, 28, 174, 70, 20);
         status_ = Add(L"STATIC", L"正在加载 DJI Home 验证码…", SS_LEFT,
-                      28, 166, 410, 18, IDC_STATUS);
+                      105, 174, 439, 20, IDC_STATUS);
         device_select_ = Add(WC_COMBOBOXW, L"",
             CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-            28, 162, 410, 120, IDC_DEVICE_SELECT);
+            105, 168, 335, 120, IDC_DEVICE_SELECT);
         ShowWindow(device_select_, SW_HIDE);
 
         login_button_ = Add(L"BUTTON", L"登录并获取 Key",
                             BS_DEFPUSHBUTTON | WS_TABSTOP,
-                            256, 199, 120, 28, IDC_LOGIN);
+                            340, 218, 126, 27, IDC_LOGIN);
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
-            386, 199, 72, 28, IDCANCEL);
+            474, 218, 76, 27, IDCANCEL);
         EnableWindow(login_button_, FALSE);
         PostMessageW(hwnd_, WM_DJI_INITIALIZE_ACCOUNT, 0, 0);
     }
@@ -323,6 +328,7 @@ private:
         }
         SendMessageW(device_select_, CB_SETCURSEL, 0, 0);
         selecting_device_ = true;
+        SetWindowTextW(status_caption_, L"设备：");
         ShowWindow(status_, SW_HIDE);
         ShowWindow(device_select_, SW_SHOW);
         SetWindowTextW(login_button_, L"使用所选 Key");
@@ -334,6 +340,12 @@ private:
         switch (message) {
         case WM_CREATE: Build(); return 0;
         case WM_DJI_INITIALIZE_ACCOUNT: LoadCaptcha(true); return 0;
+        case WM_CTLCOLORSTATIC: {
+            const auto dc = reinterpret_cast<HDC>(wp);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        }
         case WM_COMMAND:
             switch (LOWORD(wp)) {
             case IDC_REFRESH_CAPTCHA: LoadCaptcha(false); return 0;
