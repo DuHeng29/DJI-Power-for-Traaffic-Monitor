@@ -6,5 +6,5 @@
 #include <vector>
 
 namespace dji_power {
-bool ShowSmsLoginDialog(HWND parent);
+std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent);
 } // namespace dji_power

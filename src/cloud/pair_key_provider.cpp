@@ -259,6 +259,43 @@ std::string RandomHex() {
     return result;
 }
 
+bool CrackHttpsUrl(std::wstring_view url, std::wstring& host, std::wstring& path) {
+    if (url.starts_with(L"/")) {
+        host = std::wstring(kAccountHost);
+        path = url;
+        return true;
+    }
+    std::wstring owned(url);
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = static_cast<DWORD>(-1);
+    parts.dwHostNameLength = static_cast<DWORD>(-1);
+    parts.dwUrlPathLength = static_cast<DWORD>(-1);
+    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(owned.data(), static_cast<DWORD>(owned.size()), 0, &parts) ||
+        parts.nScheme != INTERNET_SCHEME_HTTPS || !parts.lpszHostName) {
+        return false;
+    }
+    host.assign(parts.lpszHostName, parts.dwHostNameLength);
+    path.assign(parts.lpszUrlPath, parts.dwUrlPathLength);
+    if (parts.lpszExtraInfo && parts.dwExtraInfoLength > 0) {
+        path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
+    }
+    if (path.empty()) path = L"/";
+    return true;
+}
+
+bool IsTrustedDjiHost(std::wstring_view host) {
+    const auto matches = [host](std::wstring_view root) {
+        return _wcsicmp(std::wstring(host).c_str(), std::wstring(root).c_str()) == 0 ||
+            (host.size() > root.size() && host[host.size() - root.size() - 1] == L'.' &&
+             _wcsicmp(std::wstring(host.substr(host.size() - root.size())).c_str(),
+                       std::wstring(root).c_str()) == 0);
+    };
+    return matches(L"dji.com") || matches(L"djigate.com");
+}
+
+
 bool ApiSucceeded(const HttpResponse& response, std::wstring& error, std::wstring_view fallback) {
     const auto json = Text(response);
     if (JsonCode(json) == 0) return true;
@@ -394,6 +431,54 @@ public:
         }
         return true;
     }
+    std::vector<CloudDevice> FetchAfterWebLogin(
+        SmsLoginSession& login, std::wstring& error) override {
+        if (login.callback_url.empty()) {
+            error = L"当前窗口中没有已完成的 DJI 登录会话";
+            return {};
+        }
+
+        std::wstring host;
+        std::wstring path;
+        if (!CrackHttpsUrl(login.callback_url, host, path)) {
+            error = L"DJI 返回的登录回调地址不是有效的 HTTPS 地址";
+            return {};
+        }
+        if (!IsTrustedDjiHost(host)) {
+            error = L"为保护登录票据，已拒绝非 DJI 域名的回调地址";
+            return {};
+        }
+
+        // 跨域回调仅依赖一次性 URL 票据，绝不把 account.dji.com Cookie 泄露给其他域名。
+        std::wstring callback_cookies = _wcsicmp(host.c_str(), kAccountHost.data()) == 0
+            ? login.cookies : std::wstring{};
+        HttpResponse callback;
+        if (!Request(host, L"GET", path, {}, {}, callback_cookies, callback, error,
+                     L"text/html,application/json,*/*")) {
+            return {};
+        }
+
+        std::string member_token;
+        const std::array candidates{
+            Utf8(login.callback_url), Utf8(login.cookies), Text(callback),
+            Utf8(callback.raw_headers), Utf8(callback_cookies)};
+        for (const auto& candidate : candidates) {
+            member_token = cloud_detail::ExtractMemberToken(candidate);
+            if (!member_token.empty()) break;
+        }
+        if (member_token.empty()) {
+            error = L"登录回调已完成，但网页会话没有提供 DJI Home Member Token（回调主机：" +
+                host + L"）";
+            return {};
+        }
+
+        auto wide_token = Wide(member_token);
+        auto devices = FetchWithMemberToken(wide_token, error);
+        SecureZeroMemory(member_token.data(), member_token.size());
+        SecureZeroMemory(wide_token.data(), wide_token.size() * sizeof(wchar_t));
+        if (!devices.empty()) login.Clear();
+        return devices;
+    }
 };
 } // namespace
 
@@ -438,8 +523,35 @@ std::wstring ExtractCallbackUrl(std::string_view json) {
 }
 
 std::string ExtractMemberToken(std::string_view json) {
-    const auto token = JsonString(json, "token");
-    return token.starts_with("US_") ? token : std::string{};
+    // Token 可能位于 JSON、重定向 URL 或 Set-Cookie 中，因此按安全字符边界扫描。
+    std::size_t cursor = 0;
+    while ((cursor = json.find("US_", cursor)) != std::string_view::npos) {
+        std::size_t end = cursor + 3;
+        while (end < json.size()) {
+            const unsigned char c = static_cast<unsigned char>(json[end]);
+            if (!std::isalnum(c) && c != '_' && c != '-' && c != '.' && c != '~' &&
+                c != '+' && c != '/' && c != '=' && c != '%') break;
+            ++end;
+        }
+        std::string token(json.substr(cursor, end - cursor));
+        for (std::size_t i = 0; i + 2 < token.size();) {
+            if (token[i] != '%') { ++i; continue; }
+            const auto nibble = [](char value) -> int {
+                if (value >= '0' && value <= '9') return value - '0';
+                if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+                if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+                return -1;
+            };
+            const int high = nibble(token[i + 1]);
+            const int low = nibble(token[i + 2]);
+            if (high < 0 || low < 0) { ++i; continue; }
+            token.replace(i, 3, 1, static_cast<char>((high << 4) | low));
+            ++i;
+        }
+        if (token.size() >= 12) return token;
+        cursor += 3;
+    }
+    return {};
 }
 
 std::wstring ExtractApiError(std::string_view json, std::wstring_view fallback) {

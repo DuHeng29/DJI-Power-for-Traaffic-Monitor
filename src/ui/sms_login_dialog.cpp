@@ -24,7 +24,8 @@ enum : int {
     IDC_SEND_SMS,
     IDC_AGREE,
     IDC_LOGIN_STATUS,
-    IDC_LOGIN
+    IDC_LOGIN,
+    IDC_FETCH_KEY
 };
 
 constexpr UINT WM_DJI_INITIALIZE_LOGIN = WM_APP + 31;
@@ -94,7 +95,7 @@ class SmsLoginWindow {
 public:
     explicit SmsLoginWindow(HWND parent) : parent_(parent) {}
 
-    bool Show() {
+    std::vector<CloudDevice> Show() {
         const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         uninitialize_com_ = SUCCEEDED(com_result);
 
@@ -111,7 +112,7 @@ public:
             CW_USEDEFAULT, CW_USEDEFAULT, 480, 300, parent_, nullptr, g_module, this);
         if (!hwnd_) {
             if (uninitialize_com_) CoUninitialize();
-            return false;
+            return {};
         }
         CenterAndShow();
         if (parent_) EnableWindow(parent_, FALSE);
@@ -125,7 +126,7 @@ public:
         }
         if (parent_) { EnableWindow(parent_, TRUE); SetForegroundWindow(parent_); }
         if (uninitialize_com_) CoUninitialize();
-        return logged_in_;
+        return std::move(devices_);
     }
 
 private:
@@ -139,6 +140,7 @@ private:
     HWND send_sms_{};
     HWND status_{};
     HWND login_button_{};
+    HWND fetch_button_{};
     HFONT font_{};
     HFONT bold_font_{};
     HBITMAP captcha_bitmap_{};
@@ -147,7 +149,7 @@ private:
     bool sms_sent_{};
     bool uninitialize_com_{};
     SmsLoginSession login_;
-    bool logged_in_{};
+    std::vector<CloudDevice> devices_;
 
     int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
@@ -228,11 +230,14 @@ private:
                       28, 170, 410, 20, IDC_LOGIN_STATUS);
 
         login_button_ = Add(L"BUTTON", L"登录", BS_DEFPUSHBUTTON | WS_TABSTOP,
-                            286, 216, 82, 28, IDC_LOGIN);
+                            194, 216, 82, 28, IDC_LOGIN);
+        fetch_button_ = Add(L"BUTTON", L"获取 Key", BS_PUSHBUTTON | WS_TABSTOP,
+                            286, 216, 82, 28, IDC_FETCH_KEY);
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
             378, 216, 80, 28, IDCANCEL);
         EnableWindow(send_sms_, FALSE);
         EnableWindow(login_button_, FALSE);
+        EnableWindow(fetch_button_, FALSE);
         PostMessageW(hwnd_, WM_DJI_INITIALIZE_LOGIN, 0, 0);
     }
 
@@ -360,13 +365,35 @@ private:
             EnableWindow(login_button_, TRUE);
             return;
         }
-        logged_in_ = true;
-        SetStatus(L"登录成功；已取得网页回调票据，尚未请求设备 Key。");
+        KillTimer(hwnd_, 2);
+        SetStatus(L"登录成功；现在可以单独尝试获取设备 Key。");
+        EnableWindow(area_, FALSE);
+        EnableWindow(phone_, FALSE);
+        EnableWindow(image_code_, FALSE);
+        EnableWindow(captcha_image_, FALSE);
+        EnableWindow(sms_code_, FALSE);
+        EnableWindow(send_sms_, FALSE);
+        EnableWindow(GetDlgItem(hwnd_, IDC_REFRESH_CAPTCHA), FALSE);
+        EnableWindow(GetDlgItem(hwnd_, IDC_AGREE), FALSE);
+        EnableWindow(fetch_button_, TRUE);
         MessageBoxW(hwnd_,
             L"DJI 账号短信登录成功，并已取得网页回调票据。\n\n"
-            L"当前版本按要求在这里停止，不会继续请求设备 Key。",
+            L"点击“获取 Key”后才会继续完成网页登录回调并查询设备。",
             L"登录成功", MB_ICONINFORMATION);
-        login_.Clear();
+    }
+
+    void FetchKey() {
+        EnableWindow(fetch_button_, FALSE);
+        SetStatus(L"正在完成登录回调并查询设备 Key…");
+        std::wstring error;
+        devices_ = DefaultPairKeyProvider().FetchAfterWebLogin(login_, error);
+        if (devices_.empty()) {
+            SetStatus(error);
+            MessageBoxW(hwnd_, error.c_str(), L"获取 Key 失败", MB_ICONERROR);
+            EnableWindow(fetch_button_, TRUE);
+            return;
+        }
+        SetStatus(L"设备 Key 获取成功。");
         DestroyWindow(hwnd_);
     }
 
@@ -393,6 +420,7 @@ private:
             case IDC_SEND_SMS: SendSms(); return 0;
             case IDC_LOGIN: Login(); return 0;
             case IDCANCEL: DestroyWindow(hwnd_); return 0;
+            case IDC_FETCH_KEY: FetchKey(); return 0;
             default: break;
             }
             break;
@@ -411,7 +439,7 @@ private:
 };
 } // namespace
 
-bool ShowSmsLoginDialog(HWND parent) {
+std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent) {
     SmsLoginWindow window(parent);
     return window.Show();
 }

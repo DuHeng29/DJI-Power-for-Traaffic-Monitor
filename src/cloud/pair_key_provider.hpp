@@ -52,6 +52,10 @@ public:
     virtual bool CompleteSmsLogin(
         SmsLoginSession& login, const std::wstring& area_code, const std::wstring& phone,
         const std::wstring& sms_code, std::wstring& error) = 0;
+
+    // 登录成功后由用户单独触发：完成网页回调，并尝试从回调会话读取 Home Token 和设备 Key。
+    virtual std::vector<CloudDevice> FetchAfterWebLogin(
+        SmsLoginSession& login, std::wstring& error) = 0;
 };
 
 PairKeyProvider& DefaultPairKeyProvider();

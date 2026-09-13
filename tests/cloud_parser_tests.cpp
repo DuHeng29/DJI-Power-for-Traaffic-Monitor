@@ -35,6 +35,12 @@ int main() {
           "应提取网页登录回调地址");
     Check(ExtractMemberToken(R"({"token":"other_token"})").empty(),
           "应拒绝非 Member Token");
+    Check(ExtractMemberToken("Set-Cookie: member=US_example-token.123; Secure") ==
+              "US_example-token.123",
+          "应从回调响应头中提取 Member Token");
+    Check(ExtractMemberToken("token=US_example%2Fpart==&next=1") == "US_example/part==",
+          "应解码 URL 编码并保留 Base64 填充字符");
+    Check(ExtractMemberToken("value=US_short").empty(), "应拒绝过短的 Token 片段");
     Check(ExtractApiError(R"({"code":1001,"message":"验证码错误"})", L"请求失败") ==
               L"验证码错误（错误码 1001）",
           "应返回服务端错误信息和错误码");
