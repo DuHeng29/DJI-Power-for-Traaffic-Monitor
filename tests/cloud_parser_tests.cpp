@@ -30,6 +30,9 @@ int main() {
 
     Check(ExtractMemberToken(R"({"data":{"token":"US_example_token"}})") == "US_example_token",
           "应提取 US_ Member Token");
+    Check(ExtractCallbackUrl(R"({"data":{"callbackUrl":"https://store.dji.com/login/callback?ticket=secret"}})") ==
+              L"https://store.dji.com/login/callback?ticket=secret",
+          "应提取网页登录回调地址");
     Check(ExtractMemberToken(R"({"token":"other_token"})").empty(),
           "应拒绝非 Member Token");
     Check(ExtractApiError(R"({"code":1001,"message":"验证码错误"})", L"请求失败") ==

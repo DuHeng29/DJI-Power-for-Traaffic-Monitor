@@ -235,14 +235,10 @@ private:
     }
 
     void FetchKey() {
-        // 登录流程放在独立模态窗口中，设置页不接触账号凭据。
-        const auto cloud_devices = ShowSmsLoginDialog(hwnd_);
-        if (cloud_devices.empty()) return;
-        SetWindowTextA(pair_, cloud_devices.front().pair_key.c_str());
-        editing_.device_name = cloud_devices.front().name;
-        const auto message = L"已取得 " + std::to_wstring(cloud_devices.size()) +
-            L" 台设备的凭据，当前填入：" + cloud_devices.front().name;
-        MessageBoxW(hwnd_, message.c_str(), L"获取 Key 成功", MB_ICONINFORMATION);
+        // 先独立验证短信登录；设备 Key 获取将在确认真实登录响应后另行适配。
+        if (ShowSmsLoginDialog(hwnd_)) {
+            SetWindowTextW(status_, L"DJI 账号登录成功；设备 Key 尚未请求。");
+        }
     }
 
     void UpdateStatus() {

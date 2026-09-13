@@ -370,11 +370,9 @@ public:
         return ApiSucceeded(sms, error, L"短信验证码发送失败");
     }
 
-    std::vector<CloudDevice> FetchWithSmsCode(SmsLoginSession& login,
-                                              const std::wstring& area_code,
-                                              const std::wstring& phone,
-                                              const std::wstring& sms_code,
-                                              std::wstring& error) override {
+    bool CompleteSmsLogin(SmsLoginSession& login, const std::wstring& area_code,
+                          const std::wstring& phone, const std::wstring& sms_code,
+                          std::wstring& error) override {
         auto form = CommonForm();
         AppendForm(form, "phone", Utf8(phone));
         AppendForm(form, "smsCode", Utf8(sms_code));
@@ -385,20 +383,16 @@ public:
         HttpResponse response;
         if (!Request(kAccountHost, L"POST", L"/user/webrest/v1/login_or_register_with_sms_code.do",
                      AccountHeaders(login, true), form, login.cookies, response, error) ||
-            !ApiSucceeded(response, error, L"短信验证码登录失败")) return {};
-        auto member_token = cloud_detail::ExtractMemberToken(Text(response));
-        if (member_token.empty()) {
-            error = L"登录成功，但 DJI 未返回 Home 所需的 Member Token";
-            return {};
+            !ApiSucceeded(response, error, L"短信验证码登录失败")) return false;
+
+        // 官方网页在登录成功后返回 callbackUrl，而不是 DJI Home Member Token。
+        // 保留回调票据到当前窗口关闭，后续 Key 获取将在真实登录验证后单独适配。
+        login.callback_url = cloud_detail::ExtractCallbackUrl(Text(response));
+        if (login.callback_url.empty()) {
+            error = L"短信验证成功，但 DJI 未返回登录回调地址";
+            return false;
         }
-        auto wide_token = Wide(member_token);
-        const auto devices = FetchWithMemberToken(wide_token, error);
-        // 临时 Token 已完成唯一用途，成功或失败都立即覆盖其窄字符串副本。
-        SecureZeroMemory(member_token.data(), member_token.size());
-        SecureZeroMemory(wide_token.data(), wide_token.size() * sizeof(wchar_t));
-        // 会话 Cookie 和验证码票据不用于 BLE，设备查询结束后统一擦除。
-        login.Clear();
-        return devices;
+        return true;
     }
 };
 } // namespace
@@ -415,6 +409,7 @@ void SmsLoginSession::Clear() noexcept {
     wipe_wide(cookies);
     wipe_wide(csrf_token);
     wipe_wide(html_version);
+    wipe_wide(callback_url);
     wipe_narrow(captcha_random);
     wipe_narrow(captcha_ticket);
 }
@@ -436,6 +431,10 @@ std::vector<CloudDevice> ParseDevicesJson(std::string_view json) {
         cursor += marker.size();
     }
     return result;
+}
+
+std::wstring ExtractCallbackUrl(std::string_view json) {
+    return Wide(JsonString(json, "callbackUrl"));
 }
 
 std::string ExtractMemberToken(std::string_view json) {

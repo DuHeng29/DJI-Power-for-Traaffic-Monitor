@@ -24,7 +24,7 @@ enum : int {
     IDC_SEND_SMS,
     IDC_AGREE,
     IDC_LOGIN_STATUS,
-    IDC_LOGIN_AND_FETCH
+    IDC_LOGIN
 };
 
 constexpr UINT WM_DJI_INITIALIZE_LOGIN = WM_APP + 31;
@@ -94,7 +94,7 @@ class SmsLoginWindow {
 public:
     explicit SmsLoginWindow(HWND parent) : parent_(parent) {}
 
-    std::vector<CloudDevice> Show() {
+    bool Show() {
         const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         uninitialize_com_ = SUCCEEDED(com_result);
 
@@ -111,7 +111,7 @@ public:
             CW_USEDEFAULT, CW_USEDEFAULT, 480, 300, parent_, nullptr, g_module, this);
         if (!hwnd_) {
             if (uninitialize_com_) CoUninitialize();
-            return {};
+            return false;
         }
         CenterAndShow();
         if (parent_) EnableWindow(parent_, FALSE);
@@ -125,7 +125,7 @@ public:
         }
         if (parent_) { EnableWindow(parent_, TRUE); SetForegroundWindow(parent_); }
         if (uninitialize_com_) CoUninitialize();
-        return std::move(devices_);
+        return logged_in_;
     }
 
 private:
@@ -147,7 +147,7 @@ private:
     bool sms_sent_{};
     bool uninitialize_com_{};
     SmsLoginSession login_;
-    std::vector<CloudDevice> devices_;
+    bool logged_in_{};
 
     int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
@@ -227,8 +227,8 @@ private:
         status_ = Add(L"STATIC", L"正在加载 DJI 验证码…", SS_LEFT,
                       28, 170, 410, 20, IDC_LOGIN_STATUS);
 
-        login_button_ = Add(L"BUTTON", L"登录并获取 Key", BS_DEFPUSHBUTTON | WS_TABSTOP,
-                            246, 216, 122, 28, IDC_LOGIN_AND_FETCH);
+        login_button_ = Add(L"BUTTON", L"登录", BS_DEFPUSHBUTTON | WS_TABSTOP,
+                            286, 216, 82, 28, IDC_LOGIN);
         Add(L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP,
             378, 216, 80, 28, IDCANCEL);
         EnableWindow(send_sms_, FALSE);
@@ -325,7 +325,7 @@ private:
         SetFocus(sms_code_);
     }
 
-    void LoginAndFetch() {
+    void Login() {
         if (!sms_sent_) return;
         if (SendDlgItemMessageW(hwnd_, IDC_AGREE, BM_GETCHECK, 0, 0) != BST_CHECKED) {
             MessageBoxW(hwnd_, L"请先确认已阅读并同意 DJI 账号条款。", L"DJI 账号", MB_ICONWARNING);
@@ -347,19 +347,26 @@ private:
             return;
         }
         EnableWindow(login_button_, FALSE);
-        SetStatus(L"正在登录并读取设备 Key…");
+        SetStatus(L"正在验证 DJI 账号…");
         std::wstring error;
-        devices_ = DefaultPairKeyProvider().FetchWithSmsCode(login_, area, phone, sms, error);
+        const bool success = DefaultPairKeyProvider().CompleteSmsLogin(login_, area, phone, sms, error);
         std::fill(phone.begin(), phone.end(), L'\0');
         std::fill(sms.begin(), sms.end(), L'\0');
         SetWindowTextW(phone_, L"");
         SetWindowTextW(sms_code_, L"");
-        if (devices_.empty()) {
+        if (!success) {
             SetStatus(error);
-            MessageBoxW(hwnd_, error.c_str(), L"获取 Key 失败", MB_ICONERROR);
+            MessageBoxW(hwnd_, error.c_str(), L"登录失败", MB_ICONERROR);
             EnableWindow(login_button_, TRUE);
             return;
         }
+        logged_in_ = true;
+        SetStatus(L"登录成功；已取得网页回调票据，尚未请求设备 Key。");
+        MessageBoxW(hwnd_,
+            L"DJI 账号短信登录成功，并已取得网页回调票据。\n\n"
+            L"当前版本按要求在这里停止，不会继续请求设备 Key。",
+            L"登录成功", MB_ICONINFORMATION);
+        login_.Clear();
         DestroyWindow(hwnd_);
     }
 
@@ -384,7 +391,7 @@ private:
             switch (LOWORD(wp)) {
             case IDC_REFRESH_CAPTCHA: RefreshCaptcha(); return 0;
             case IDC_SEND_SMS: SendSms(); return 0;
-            case IDC_LOGIN_AND_FETCH: LoginAndFetch(); return 0;
+            case IDC_LOGIN: Login(); return 0;
             case IDCANCEL: DestroyWindow(hwnd_); return 0;
             default: break;
             }
@@ -404,7 +411,7 @@ private:
 };
 } // namespace
 
-std::vector<CloudDevice> ShowSmsLoginDialog(HWND parent) {
+bool ShowSmsLoginDialog(HWND parent) {
     SmsLoginWindow window(parent);
     return window.Show();
 }

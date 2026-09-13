@@ -1,4 +1,4 @@
-// 本文件定义 DJI 账号短信登录及一次性换取本地 pair_key 的接口。
+// 本文件定义 DJI 账号短信登录会话与后续 pair_key 获取所需的接口边界。
 #pragma once
 
 #include <cstdint>
@@ -18,6 +18,7 @@ struct CloudDevice {
 struct SmsLoginSession {
     std::wstring cookies;
     std::wstring csrf_token;
+    std::wstring callback_url;
     std::wstring html_version;
     std::string captcha_random;
     std::string captcha_ticket;
@@ -47,8 +48,8 @@ public:
                              const std::wstring& phone, const std::wstring& image_code,
                              std::wstring& error) = 0;
 
-    // 校验短信验证码，取得临时 member token 后立即读取设备 pair_key。
-    virtual std::vector<CloudDevice> FetchWithSmsCode(
+    // 本阶段只完成短信登录并保留网页回调票据，不擅自继续请求设备 Key。
+    virtual bool CompleteSmsLogin(
         SmsLoginSession& login, const std::wstring& area_code, const std::wstring& phone,
         const std::wstring& sms_code, std::wstring& error) = 0;
 };
@@ -58,6 +59,7 @@ PairKeyProvider& DefaultPairKeyProvider();
 namespace cloud_detail {
 // 这些解析函数独立于网络，供自动化测试覆盖 DJI 返回字段变化。
 std::vector<CloudDevice> ParseDevicesJson(std::string_view json);
+std::wstring ExtractCallbackUrl(std::string_view json);
 std::string ExtractMemberToken(std::string_view json);
 std::wstring ExtractApiError(std::string_view json, std::wstring_view fallback);
 } // namespace cloud_detail
